@@ -31,6 +31,12 @@ seishonen_shussekibo/
     ├── 99_Utils.gs             # ユーティリティ（ロック・日付整形など）
     ├── appsscript.json
     ├── index.html
+    ├── tab_dashboard.html   # ダッシュボードの初期プレースホルダ
+    ├── tab_attendance.html  # 出席登録タブの初期プレースホルダ
+    ├── tab_events.html      # イベント管理タブの初期プレースホルダ
+    ├── tab_members.html     # メンバ管理タブの初期プレースホルダ
+    ├── tab_summary.html     # 集計タブの初期プレースホルダ
+    ├── tab_settings.html    # 設定タブの初期プレースホルダ
     ├── styles.html
     └── scripts.html
 ```
@@ -63,12 +69,12 @@ seishonen_shussekibo/
 
    ```bash
    clasp push -f
-   clasp open
+   clasp open-script
    ```
 
 4. GASエディタで `createNewSpreadsheet` を1回だけ実行
    - 初回だけOAuth認可ダイアログが出るので承認
-   - 実行後、ログにスプレッドシートのURLが表示される
+   - 実行後、ログにスプレッドシートのURLが表示され、必要シート（メンバ/イベント/出席/設定/分類）まで自動作成される
 
 ### B. clasp を使わずブラウザで直接貼り付ける場合
 
@@ -83,19 +89,38 @@ seishonen_shussekibo/
 
 | 関数 | 用途 |
 |---|---|
-| `createNewSpreadsheet()` | スタンドアロン運用で、新規にスプレッドシートを作成する |
+| `createNewSpreadsheet()` | スタンドアロン運用で、新規スプレッドシートを作成し、そのまま初期化まで実行する |
 | `initializeSpreadsheet()` | すでにバインドされたスプレッドシート、または `PROP_KEYS.SPREADSHEET_ID` に保存済みのIDに対して初期化・再整備する |
 
 どちらも、メンバ／分類マスタ／設定は **初回のみデータ投入** し、2回目以降はヘッダ行のみ再構築します（既存データは保持）。
 
-## Web アプリとしてデプロイ
+## Web アプリとしてデプロイ（clasp）
 
-1. GASエディタで「デプロイ」→「新しいデプロイ」
-2. 種類：**ウェブアプリ**
-3. 設定：
-   - 次のユーザとして実行：**自分（デプロイ者）**
-   - アクセスできるユーザ：**組織内の全員**（または会員個人ずつ許可）
-4. デプロイ後のURLを会員に共有
+`src/appsscript.json` に Web アプリ設定（`executeAs: USER_DEPLOYING`, `access: DOMAIN`）を含めているため、デプロイもCLIで完結できます。
+
+1. 最新コードを push
+
+   ```bash
+   clasp push -f
+   ```
+
+2. 初回デプロイ（新規Deploymentを作る）
+
+   ```bash
+   clasp version "initial webapp release"
+   clasp deploy --description "prod"
+   ```
+
+3. 2回目以降の更新デプロイ（同じDeployment IDを更新）
+
+   ```bash
+   clasp version "update: 変更内容メモ"
+   clasp deploy --deploymentId <初回に発行されたDeployment ID> --description "prod"
+   ```
+
+4. URL確認と共有
+   - `clasp open-script` でスクリプトエディタを開く
+   - 「デプロイを管理」から対象Deploymentの **WebアプリURL** を確認して会員に共有
 
 ## Googleカレンダー取込の使い方
 
@@ -156,6 +181,10 @@ seishonen_shussekibo/
 | 初回アクセスで認可エラー | GASエディタで `createNewSpreadsheet` を1回手動実行して認可を通す |
 | カレンダー取込で0件 | カレンダーIDが間違っていないか、期間内にイベントがあるか確認 |
 | ICS取込で0件 | URLが「ICS形式」であることを確認（`.ics` で終わる） |
+| `Unknown command "clasp open"` | `@google/clasp` の新しいバージョンでは `clasp open-script` にコマンド名が変更。READMEの手順どおり `clasp open-script` を実行 |
+| `Deployment ID` が分からない | `clasp deployments` で一覧を表示し、更新対象の Deployment ID を `clasp deploy --deploymentId ...` に指定 |
+| `Exception: 「tab_dashboard」という HTML ファイルは見つかりませんでした` | `tab_*.html`（`tab_dashboard.html` など）をプロジェクトに作成してから `clasp push -f` を再実行 |
+| `createNewSpreadsheet` 実行後に空のシートしかない | 最新コードでは `createNewSpreadsheet` が初期化まで実行。反映前に作成済みなら `initializeSpreadsheet()` を1回実行 |
 | 「シート1」が残る | 初期化時に自動削除するよう実装済み。残っていれば手動で削除OK |
 
 ## ライセンス

@@ -43,16 +43,22 @@ function initializeSpreadsheet() {
 
 /**
  * コンテナバインドされていないスタンドアロンプロジェクトで、
- * 新規にスプレッドシートを作成してIDを登録する。
+ * 新規にスプレッドシートを作成してIDを登録し、必要シートまで初期化する。
  * @param {string} title スプレッドシートのタイトル
  */
 function createNewSpreadsheet(title) {
   const name = title || '2026年度荒川区青少年委員連絡会出席簿';
   const ss = SpreadsheetApp.create(name);
   PropertiesService.getScriptProperties().setProperty(PROP_KEYS.SPREADSHEET_ID, ss.getId());
+
+  // 作成直後に必要シートを初期化し、空のスプレッドシートのままにならないようにする。
+  const initResult = initializeSpreadsheet();
+
   return {
     spreadsheetId: ss.getId(),
-    spreadsheetUrl: ss.getUrl()
+    spreadsheetUrl: ss.getUrl(),
+    initialized: true,
+    message: initResult.message
   };
 }
 
