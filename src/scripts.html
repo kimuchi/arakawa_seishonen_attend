@@ -559,11 +559,18 @@ function renderEventRows_() {
         </div>
       </div>
       <div class="event-item__actions">
+        <button class="btn btn--sm" data-att="${ev.id}">出欠登録</button>
         <button class="btn btn--sm" data-edit="${ev.id}">編集</button>
         <button class="btn btn--sm btn--danger" data-del="${ev.id}">削除</button>
       </div>
     </div>
   `).join('');
+  box.querySelectorAll('[data-att]').forEach(b => {
+    b.addEventListener('click', (e) => {
+      const id = Number(e.currentTarget.dataset.att);
+      openAttendanceForEvent(id);
+    });
+  });
   box.querySelectorAll('[data-edit]').forEach(b => {
     b.addEventListener('click', (e) => {
       const id = Number(e.currentTarget.dataset.edit);
