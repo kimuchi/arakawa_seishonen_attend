@@ -231,6 +231,13 @@ async function renderDashboard() {
       </div>
     </div>
   `;
+
+  panel.querySelectorAll('[data-go-attendance]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const eventId = Number(e.currentTarget.dataset.goAttendance);
+      openAttendanceForEvent(eventId);
+    });
+  });
 }
 function renderEventList_(events, emptyMsg) {
   if (!events || events.length === 0) {
@@ -247,9 +254,29 @@ function renderEventList_(events, emptyMsg) {
           ${ev.dailyAllowance ? '<span class="pill pill--ok">日当対象</span>' : ''}
           ${ev.allDay ? '<span class="pill">終日</span>' : (ev.startTime ? '<span>' + esc(ev.startTime) + '</span>' : '')}
         </div>
+        ${ev.id ? `<div class="mt-2"><button class="btn btn--sm" data-go-attendance="${ev.id}">このイベントで出欠登録</button></div>` : ''}
       </div>
     </div>
   `).join('');
+}
+
+function openAttendanceForEvent(eventId) {
+  if (!eventId) return;
+  switchTab('attendance');
+  // switchTab 内の renderAttendanceTab() 描画完了を待ってから選択
+  let retry = 0;
+  const maxRetry = 10;
+  const timer = setInterval(() => {
+    const select = document.getElementById('attEventSelect');
+    if (!select) {
+      retry++;
+      if (retry >= maxRetry) clearInterval(timer);
+      return;
+    }
+    select.value = String(eventId);
+    select.dispatchEvent(new Event('change'));
+    clearInterval(timer);
+  }, 50);
 }
 function formatDateBadge_(dateStr) {
   if (!dateStr) return '';
