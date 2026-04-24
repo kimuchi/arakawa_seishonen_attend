@@ -467,11 +467,10 @@ async function renderEventsTab() {
   panel.innerHTML = `
     <div class="card">
       <h2 class="card__title">📅 イベント管理</h2>
-      <p class="card__subtitle">イベントの追加・編集・削除。Googleカレンダー/ICSからの一括取込ができます。</p>
+      <p class="card__subtitle">イベントの追加・編集・削除。Script Properties の ICS URL から一括取込ができます。</p>
       <div class="btn-group mb-4">
         <button class="btn btn--primary" id="btnAddEvent">+ 新規イベント</button>
-        <button class="btn" id="btnImportCal">📥 Googleカレンダーから取込</button>
-        <button class="btn" id="btnImportIcs">📄 ICSファイルから取込</button>
+        <button class="btn" id="btnImportIcsAuto">🔄 ICSを自動取込</button>
       </div>
 
       <div class="filter-bar">
@@ -494,8 +493,7 @@ async function renderEventsTab() {
     </div>
   `;
   document.getElementById('btnAddEvent').addEventListener('click', () => openEventModal());
-  document.getElementById('btnImportCal').addEventListener('click', openCalendarImportModal);
-  document.getElementById('btnImportIcs').addEventListener('click', openIcsImportModal);
+  document.getElementById('btnImportIcsAuto').addEventListener('click', runConfiguredIcsImport);
   ['evFilterCategory', 'evFilterAllowance', 'evFilterTitle'].forEach(id => {
     const el = document.getElementById(id);
     el.addEventListener('change', renderEventRows_);
@@ -679,118 +677,21 @@ function openEventModal(ev) {
   });
 }
 
-async function openCalendarImportModal() {
+async function runConfiguredIcsImport() {
+  const from = APP.settings['年度開始日'] || '2026-04-01';
+  const to = APP.settings['年度終了日'] || '2027-03-31';
+  if (!confirm(`Script Properties の ICS_IMPORT_URL から取り込みます。\n対象期間: ${from} ～ ${to}\n実行しますか？`)) return;
   showLoader(true);
-  let cals = [];
   try {
-    cals = await callApi('api_listAvailableCalendars');
+    const r = await callApi('api_importFromConfiguredIcs', from, to, { autoClassify: true });
+    toast(`取込: ${r.imported}件 / スキップ: ${r.skipped}件`, 'success');
+    APP.events = await callApi('api_listEvents', {});
+    renderEventRows_();
   } catch (e) {
-    toast('カレンダー一覧取得失敗: ' + e.message, 'error');
+    toast('取込エラー: ' + e.message, 'error');
   } finally {
     showLoader(false);
   }
-  const body = `
-    <p>Googleカレンダーから指定期間のイベントを取り込みます。分類は自動推定しますが、取込後に個別編集できます。</p>
-    <div class="form-row">
-      <div class="form-field" style="flex: 1 1 100%;">
-        <label class="form-field__label">カレンダー</label>
-        <select id="impCalId" class="form-field__select">
-          ${cals.map(c => `<option value="${esc(c.id)}">${esc(c.name)}${c.isOwned ? ' (自分)' : ''}</option>`).join('')}
-        </select>
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-field">
-        <label class="form-field__label">開始日</label>
-        <input type="date" id="impFrom" class="form-field__input" value="${APP.settings['年度開始日'] || '2026-04-01'}">
-      </div>
-      <div class="form-field">
-        <label class="form-field__label">終了日</label>
-        <input type="date" id="impTo" class="form-field__input" value="${APP.settings['年度終了日'] || '2027-03-31'}">
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-field form-field--check">
-        <input type="checkbox" id="impAutoClassify" checked>
-        <label for="impAutoClassify">分類を自動推定する</label>
-      </div>
-    </div>
-  `;
-  const footer = `
-    <button class="btn" data-modal-close>キャンセル</button>
-    <button class="btn btn--primary" id="btnDoImportCal">取込実行</button>
-  `;
-  openModal('Googleカレンダーから取込', body, footer);
-  document.getElementById('btnDoImportCal').addEventListener('click', async () => {
-    const calId = document.getElementById('impCalId').value;
-    const from = document.getElementById('impFrom').value;
-    const to = document.getElementById('impTo').value;
-    const auto = document.getElementById('impAutoClassify').checked;
-    showLoader(true);
-    try {
-      const r = await callApi('api_importFromGoogleCalendar', calId, from, to, { autoClassify: auto });
-      toast(`取込: ${r.imported}件 / スキップ: ${r.skipped}件`, 'success');
-      closeModal();
-      APP.events = await callApi('api_listEvents', {});
-      renderEventRows_();
-    } catch (e) {
-      toast('取込エラー: ' + e.message, 'error');
-    } finally {
-      showLoader(false);
-    }
-  });
-}
-
-function openIcsImportModal() {
-  const body = `
-    <p>ICSファイルのURLを指定して取り込みます。<br>Googleカレンダーの「秘密アドレス(iCal)」や他システムのICSに対応します。</p>
-    <div class="form-row">
-      <div class="form-field" style="flex: 1 1 100%;">
-        <label class="form-field__label">ICSのURL</label>
-        <input type="url" id="icsUrl" class="form-field__input" placeholder="https://calendar.google.com/calendar/ical/.../basic.ics">
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-field">
-        <label class="form-field__label">開始日</label>
-        <input type="date" id="icsFrom" class="form-field__input" value="${APP.settings['年度開始日'] || '2026-04-01'}">
-      </div>
-      <div class="form-field">
-        <label class="form-field__label">終了日</label>
-        <input type="date" id="icsTo" class="form-field__input" value="${APP.settings['年度終了日'] || '2027-03-31'}">
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-field form-field--check">
-        <input type="checkbox" id="icsAutoClassify" checked>
-        <label for="icsAutoClassify">分類を自動推定する</label>
-      </div>
-    </div>
-  `;
-  const footer = `
-    <button class="btn" data-modal-close>キャンセル</button>
-    <button class="btn btn--primary" id="btnDoImportIcs">取込実行</button>
-  `;
-  openModal('ICSから取込', body, footer);
-  document.getElementById('btnDoImportIcs').addEventListener('click', async () => {
-    const url = document.getElementById('icsUrl').value.trim();
-    const from = document.getElementById('icsFrom').value;
-    const to = document.getElementById('icsTo').value;
-    const auto = document.getElementById('icsAutoClassify').checked;
-    if (!url) { toast('URLを入力してください', 'error'); return; }
-    showLoader(true);
-    try {
-      const r = await callApi('api_importFromIcsUrl', url, from, to, { autoClassify: auto });
-      toast(`取込: ${r.imported}件 / スキップ: ${r.skipped}件`, 'success');
-      closeModal();
-      APP.events = await callApi('api_listEvents', {});
-      renderEventRows_();
-    } catch (e) {
-      toast('取込エラー: ' + e.message, 'error');
-    } finally {
-      showLoader(false);
-    }
-  });
 }
 
 // ==========================================================

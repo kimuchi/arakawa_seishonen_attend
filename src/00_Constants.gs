@@ -14,7 +14,8 @@ const SHEET_NAMES = {
 
 // ===== スプレッドシートID保存キー =====
 const PROP_KEYS = {
-  SPREADSHEET_ID: 'SPREADSHEET_ID'
+  SPREADSHEET_ID: 'SPREADSHEET_ID',
+  ICS_IMPORT_URL: 'ICS_IMPORT_URL'
 };
 
 // ===== 年度設定（初期化時に使用） =====

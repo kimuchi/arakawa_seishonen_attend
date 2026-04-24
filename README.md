@@ -6,8 +6,7 @@ Googleスプレッドシートをデータベースとして、Google Apps Scrip
 
 - **出席登録**：イベントごとに〇×を一括登録。地区／実践部会／専門部会／氏名でメンバを絞り込み可能
 - **イベント管理**：分類（ブロック／実践部会／専門部会／関連団体／全体事業など）と日当対象フラグ付きで登録・編集・削除
-- **Googleカレンダー取込**：接続済みカレンダーから期間指定で一括取込（重複スキップ）
-- **ICS URL取込**：公開ICS URLを指定して一括取込
+- **ICS自動取込**：Script Properties に設定した ICS URL から期間指定で一括取込（同日・同名は重複スキップ）
 - **自動分類推定**：イベント名から分類を推定（「定例会」「南千住ブロック」「広報部会」等）
 - **メンバ管理**：36名の初期メンバ投入後、Web画面・シート直接編集のどちらでも参照変更可
 - **集計**：上半期／下半期／通年／任意期間で、メンバ別・イベント別に日当（500円×日数）を計算。CSV出力対応
@@ -22,7 +21,7 @@ seishonen_shussekibo/
     ├── appsscript.json         # マニフェスト（タイムゾーン／スコープ／WebApp設定）
     ├── 00_Constants.gs         # 定数・36名の初期メンバデータ・33種の初期分類
     ├── 10_Initializer.gs       # 初期化（スプレッドシート作成・各シート構築）
-    ├── 20_Importer.gs          # Googleカレンダー／ICS取込・自動分類
+    ├── 20_Importer.gs          # ICS取込・自動分類（同日同名は重複スキップ）
     ├── 30_WebApp.gs            # doGet・ブートストラップ
     ├── 40_Members_Api.gs       # メンバCRUD
     ├── 50_Events_Api.gs        # イベントCRUD・分類マスタ
@@ -122,22 +121,22 @@ seishonen_shussekibo/
    - `clasp open-script` でスクリプトエディタを開く
    - 「デプロイを管理」から対象Deploymentの **WebアプリURL** を確認して会員に共有
 
-## Googleカレンダー取込の使い方
+## ICS自動取込の使い方
 
-出席簿Webアプリ → 「イベント管理」タブ → 「📅 カレンダー取込」ボタン
+出席簿Webアプリ → 「イベント管理」タブ → 「🔄 ICSを自動取込」ボタン
 
-1. カレンダーIDを指定（既定は `primary`）
-2. 期間を指定（既定は年度開始〜年度末）
-3. 「取込実行」
+1. Script Properties に `ICS_IMPORT_URL` を設定（例：Googleカレンダーの秘密アドレス(iCal)）
+2. 取込ボタンを押す
+3. 年度開始日〜年度終了日の期間で自動取込
 
-> 共有カレンダー（例：`xxxxx@group.calendar.google.com`）を使う場合は、デプロイ者のアカウントでそのカレンダーを購読しておく必要があります。
+> 同じ「日付 + イベント名」のイベントは重複としてスキップされます。
 
-## ICS URL取込の使い方
+## Script Properties の設定方法
 
-出席簿Webアプリ → 「イベント管理」タブ → 「🔗 ICS取込」ボタン
+Apps Script エディタ → 「プロジェクトの設定」→「スクリプト プロパティ」に以下を登録します。
 
-1. ICS URL を入力（例：Googleカレンダーの「公開URL（非公開アドレス）」のICS形式）
-2. 「取込実行」
+- キー: `ICS_IMPORT_URL`
+- 値: 取り込み元のICS URL
 
 > 注意：繰り返しイベント（RRULE）の展開には対応していません。1回のみのイベントを取り込みます。
 
@@ -179,8 +178,7 @@ seishonen_shussekibo/
 | 症状 | 対処 |
 |---|---|
 | 初回アクセスで認可エラー | GASエディタで `createNewSpreadsheet` を1回手動実行して認可を通す |
-| カレンダー取込で0件 | カレンダーIDが間違っていないか、期間内にイベントがあるか確認 |
-| ICS取込で0件 | URLが「ICS形式」であることを確認（`.ics` で終わる） |
+| ICS自動取込で0件 | `ICS_IMPORT_URL` のURLが有効か、年度期間内にイベントがあるか確認 |
 | `Unknown command "clasp open"` | `@google/clasp` の新しいバージョンでは `clasp open-script` にコマンド名が変更。READMEの手順どおり `clasp open-script` を実行 |
 | `Deployment ID` が分からない | `clasp deployments` で一覧を表示し、更新対象の Deployment ID を `clasp deploy --deploymentId ...` に指定 |
 | `Exception: 「tab_dashboard」という HTML ファイルは見つかりませんでした` | `tab_*.html`（`tab_dashboard.html` など）をプロジェクトに作成してから `clasp push -f` を再実行 |
