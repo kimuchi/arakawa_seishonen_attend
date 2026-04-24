@@ -1,0 +1,126 @@
+/**
+ * 00_Constants.gs
+ * システム全体で使う定数を定義します。
+ */
+
+// ===== スプレッドシート内のシート名 =====
+const SHEET_NAMES = {
+  MEMBERS: 'メンバ',
+  EVENTS: 'イベント',
+  ATTENDANCE: '出席',
+  SETTINGS: '設定',
+  CLASSIFICATION: '分類マスタ'
+};
+
+// ===== スプレッドシートID保存キー =====
+const PROP_KEYS = {
+  SPREADSHEET_ID: 'SPREADSHEET_ID'
+};
+
+// ===== 年度設定（初期化時に使用） =====
+const FISCAL_YEAR_DEFAULT = {
+  YEAR: 2026,
+  START_DATE: '2026-04-01',
+  END_DATE: '2027-03-31',
+  FIRST_HALF_END: '2026-09-30', // 上半期末
+  DAILY_ALLOWANCE: 500           // 日当(円)
+};
+
+// ===== 分類マスタ（初期値） =====
+// ユーザはスプレッドシート上で分類マスタを編集可能。
+// 分類（大）と、それに紐づくサブ分類の組み合わせ。
+const INITIAL_CLASSIFICATIONS = [
+  // ブロック
+  { category: 'ブロック', subcategory: '南千住', defaultAllowance: false },
+  { category: 'ブロック', subcategory: '荒川・町屋', defaultAllowance: false },
+  { category: 'ブロック', subcategory: '尾久', defaultAllowance: false },
+  { category: 'ブロック', subcategory: '日暮里', defaultAllowance: false },
+  { category: 'ブロック', subcategory: '全ブロック合同', defaultAllowance: false },
+  // 実践部会
+  { category: '実践部会', subcategory: '校庭', defaultAllowance: true },
+  { category: '実践部会', subcategory: '少年', defaultAllowance: true },
+  { category: '実践部会', subcategory: '青年', defaultAllowance: true },
+  // 専門部会
+  { category: '専門部会', subcategory: '総務', defaultAllowance: true },
+  { category: '専門部会', subcategory: '調査研修', defaultAllowance: true },
+  { category: '専門部会', subcategory: '広報', defaultAllowance: true },
+  // 関連団体
+  { category: '関連団体', subcategory: '都連(東京都青少年委員会連合会)', defaultAllowance: true },
+  { category: '関連団体', subcategory: '荒小連(荒川小学生連合)', defaultAllowance: true },
+  { category: '関連団体', subcategory: '子ども会', defaultAllowance: true },
+  { category: '関連団体', subcategory: 'ロータリークラブ', defaultAllowance: false },
+  { category: '関連団体', subcategory: 'アリストック', defaultAllowance: true },
+  { category: '関連団体', subcategory: '青少年問題協議会', defaultAllowance: true },
+  { category: '関連団体', subcategory: '薬物乱用防止推進協議会', defaultAllowance: true },
+  { category: '関連団体', subcategory: '社会を明るくする運動', defaultAllowance: true },
+  // 全体事業
+  { category: '全体事業', subcategory: '定例会', defaultAllowance: true },
+  { category: '全体事業', subcategory: '総会', defaultAllowance: true },
+  { category: '全体事業', subcategory: 'チャレンジ共和国', defaultAllowance: true },
+  { category: '全体事業', subcategory: 'チャレンジキャンプ', defaultAllowance: true },
+  { category: '全体事業', subcategory: 'さくら教室', defaultAllowance: true },
+  { category: '全体事業', subcategory: '川の手あらかわまつり', defaultAllowance: true },
+  { category: '全体事業', subcategory: '二十歳のつどい', defaultAllowance: true },
+  { category: '全体事業', subcategory: '退任式', defaultAllowance: true },
+  { category: '全体事業', subcategory: '宿泊研修', defaultAllowance: true },
+  { category: '全体事業', subcategory: '日帰り研修', defaultAllowance: true },
+  { category: '全体事業', subcategory: '忘年会・懇親会', defaultAllowance: false },
+  { category: '全体事業', subcategory: '自主研修', defaultAllowance: false },
+  { category: '全体事業', subcategory: 'タノシバ', defaultAllowance: true },
+  // その他
+  { category: 'その他', subcategory: 'その他', defaultAllowance: false }
+];
+
+// ===== 初期メンバデータ（2026年度) =====
+// 木村さんから提供されたリストを投入。
+// 会長は実践部会・専門部会ともに「-」。
+const INITIAL_MEMBERS = [
+  { no: 1,  district: '南千住',    name: '髙橋美夏',    term: '5期', role: '',                 jissen: '校庭', senmon: '総務' },
+  { no: 2,  district: '南千住',    name: '久保木秋徳',  term: '4期', role: '副ブロック長',     jissen: '少年', senmon: '調査研修' },
+  { no: 3,  district: '南千住',    name: '小寺政央',    term: '3期', role: '副会長',           jissen: '青年', senmon: '総務' },
+  { no: 4,  district: '南千住',    name: '児玉麻実子',  term: '2期', role: 'ブロック長',       jissen: '校庭', senmon: '広報' },
+  { no: 5,  district: '南千住',    name: '鈴木義則',    term: '2期', role: '調査研修副部長',   jissen: '少年', senmon: '調査研修' },
+  { no: 6,  district: '南千住',    name: '根本良子',    term: '2期', role: '',                 jissen: '青年', senmon: '総務' },
+  { no: 7,  district: '南千住',    name: '上野正樹',    term: '2期', role: '青年部長',         jissen: '青年', senmon: '調査研修' },
+  { no: 8,  district: '南千住',    name: '田頭虎雄太',  term: '1期', role: '',                 jissen: '校庭', senmon: '調査研修' },
+  { no: 9,  district: '南千住',    name: '吉開千穂',    term: '1期', role: '',                 jissen: '青年', senmon: '調査研修' },
+  { no: 10, district: '南千住',    name: '渡邊力也',    term: '1期', role: '',                 jissen: '校庭', senmon: '広報' },
+  { no: 11, district: '荒川・町屋', name: '酒井弥生',    term: '5期', role: '校庭副部長',       jissen: '校庭', senmon: '調査研修' },
+  { no: 12, district: '荒川・町屋', name: '島田浩一',    term: '5期', role: 'ブロック長',       jissen: '校庭', senmon: '調査研修' },
+  { no: 13, district: '荒川・町屋', name: '増田秀一',    term: '4期', role: '会計',             jissen: '少年', senmon: '総務' },
+  { no: 14, district: '荒川・町屋', name: '柳啓介',      term: '3期', role: '会計監査',         jissen: '少年', senmon: '広報' },
+  { no: 15, district: '荒川・町屋', name: '藤野哲也',    term: '3期', role: '副会長',           jissen: '校庭', senmon: '調査研修' },
+  { no: 16, district: '荒川・町屋', name: '石田実',      term: '2期', role: '',                 jissen: '青年', senmon: '広報' },
+  { no: 17, district: '荒川・町屋', name: '卜部茂人',    term: '2期', role: '副ブロック長',     jissen: '校庭', senmon: '総務' },
+  { no: 18, district: '荒川・町屋', name: '野中秀哉',    term: '2期', role: '副ブロック長',     jissen: '青年', senmon: '広報' },
+  { no: 19, district: '尾久',      name: '工藤貴子',    term: '5期', role: '会計監査',         jissen: '青年', senmon: '総務' },
+  { no: 20, district: '尾久',      name: '久米隆子',    term: '4期', role: '青年副部長',       jissen: '青年', senmon: '総務' },
+  { no: 21, district: '尾久',      name: '萩谷一隆',    term: '4期', role: '',                 jissen: '青年', senmon: '広報' },
+  { no: 22, district: '尾久',      name: '山本めぐみ',  term: '3期', role: 'ブロック長',       jissen: '校庭', senmon: '総務' },
+  { no: 23, district: '尾久',      name: '太田有一',    term: '2期', role: '調査研修部長・副ブロック長', jissen: '青年', senmon: '調査研修' },
+  { no: 24, district: '尾久',      name: '小林有一',    term: '2期', role: '少年部長',         jissen: '少年', senmon: '調査研修' },
+  { no: 25, district: '尾久',      name: '酒井真樹子',  term: '2期', role: '会計・副ブロック長', jissen: '少年', senmon: '広報' },
+  { no: 26, district: '尾久',      name: '佐藤裕子',    term: '2期', role: '副会長',           jissen: '少年', senmon: '広報' },
+  { no: 27, district: '尾久',      name: '鈴木奈美',    term: '2期', role: '広報部長',         jissen: '校庭', senmon: '広報' },
+  { no: 28, district: '尾久',      name: '横山貴子',    term: '2期', role: '総務副部長',       jissen: '少年', senmon: '総務' },
+  { no: 29, district: '日暮里',    name: '木村光範',    term: '6期', role: '会長',             jissen: '-',   senmon: '-' },
+  { no: 30, district: '日暮里',    name: '新井雅人',    term: '4期', role: '総務部長',         jissen: '少年', senmon: '総務' },
+  { no: 31, district: '日暮里',    name: '髙橋英一',    term: '4期', role: '会計監査',         jissen: '青年', senmon: '調査研修' },
+  { no: 32, district: '日暮里',    name: '古味健介',    term: '2期', role: '広報副部長',       jissen: '少年', senmon: '広報' },
+  { no: 33, district: '日暮里',    name: '藤井雅一',    term: '2期', role: '校庭部長',         jissen: '校庭', senmon: '広報' },
+  { no: 34, district: '日暮里',    name: '寺本英夫',    term: '2期', role: '少年副部長',       jissen: '少年', senmon: '総務' },
+  { no: 35, district: '日暮里',    name: '松本沙織',    term: '2期', role: 'ブロック長',       jissen: '青年', senmon: '総務' },
+  { no: 36, district: '日暮里',    name: '永井陽子',    term: '1期', role: '副ブロック長',     jissen: '校庭', senmon: '調査研修' }
+];
+
+// ===== 出席区分 =====
+const ATTENDANCE_STATUS = {
+  ATTENDED: '出席',
+  ABSENT: '欠席',
+  EMPTY: ''
+};
+
+// ===== 地区一覧（UIのフィルタ用、メンバデータから動的生成も可） =====
+const DISTRICTS = ['南千住', '荒川・町屋', '尾久', '日暮里'];
+const JISSEN_BUKAI = ['校庭', '少年', '青年'];
+const SENMON_BUKAI = ['総務', '調査研修', '広報'];

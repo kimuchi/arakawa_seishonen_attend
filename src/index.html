@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <title>荒川区青少年委員連絡会 出席簿</title>
+  <?!= include('styles'); ?>
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-header__inner">
+      <div class="app-header__title">
+        <span class="app-header__badge">📋</span>
+        <div>
+          <div class="app-header__name">荒川区青少年委員連絡会 出席簿</div>
+          <div class="app-header__sub" id="fiscalYearLabel">2026年度</div>
+        </div>
+      </div>
+      <div class="app-header__meta">
+        <span id="userEmailLabel" class="pill pill--ghost"></span>
+        <a href="#" id="openSheetBtn" class="pill pill--ghost" target="_blank">📄 シートを開く</a>
+      </div>
+    </div>
+    <nav class="app-nav">
+      <button class="tab-btn is-active" data-tab="dashboard">ダッシュボード</button>
+      <button class="tab-btn" data-tab="attendance">出席登録</button>
+      <button class="tab-btn" data-tab="events">イベント管理</button>
+      <button class="tab-btn" data-tab="members">メンバ管理</button>
+      <button class="tab-btn" data-tab="summary">集計</button>
+      <button class="tab-btn" data-tab="settings">設定</button>
+    </nav>
+  </header>
+
+  <main class="app-main">
+    <div id="loader" class="loader is-active">
+      <div class="loader__spinner"></div>
+      <div class="loader__text">読み込み中...</div>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <section id="tab-dashboard" class="tab-panel is-active">
+      <?!= include('tab_dashboard'); ?>
+    </section>
+    <section id="tab-attendance" class="tab-panel">
+      <?!= include('tab_attendance'); ?>
+    </section>
+    <section id="tab-events" class="tab-panel">
+      <?!= include('tab_events'); ?>
+    </section>
+    <section id="tab-members" class="tab-panel">
+      <?!= include('tab_members'); ?>
+    </section>
+    <section id="tab-summary" class="tab-panel">
+      <?!= include('tab_summary'); ?>
+    </section>
+    <section id="tab-settings" class="tab-panel">
+      <?!= include('tab_settings'); ?>
+    </section>
+  </main>
+
+  <div id="modal" class="modal" aria-hidden="true">
+    <div class="modal__backdrop" data-modal-close></div>
+    <div class="modal__content" role="dialog" aria-modal="true">
+      <div class="modal__header">
+        <h2 id="modalTitle" class="modal__title">タイトル</h2>
+        <button type="button" class="modal__close" data-modal-close aria-label="閉じる">×</button>
+      </div>
+      <div id="modalBody" class="modal__body"></div>
+      <div id="modalFooter" class="modal__footer"></div>
+    </div>
+  </div>
+
+  <script>
+    // サーバから渡されるブートデータ
+    window.__BOOT_DATA__ = <?!= JSON.stringify(bootData || {}); ?>;
+  </script>
+  <?!= include('scripts'); ?>
+</body>
+</html>
