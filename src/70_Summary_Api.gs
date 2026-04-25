@@ -174,6 +174,13 @@ function resolveDateRange_(opt, settings) {
       const to = (fy + 2) + '-03-31';
       return { from: from, to: to, label: fy + '年度〜' + (fy + 1) + '年度 (' + from + ' ～ ' + to + ')' };
     }
+    case 'quarter': {
+      const fy = Number(opt.fiscalYear);
+      const q = Number(opt.quarter);
+      if (!fy || !q || q < 1 || q > 4) throw new Error('四半期の指定が不正です。');
+      const r = quarterRange_(fy, q);
+      return { from: r.from, to: r.to, label: fy + '年度 Q' + q + ' (' + r.from + ' ～ ' + r.to + ')' };
+    }
     case 'firstHalf':
       return { from: start, to: firstHalfEnd, label: '上半期 (' + start + ' ～ ' + firstHalfEnd + ')' };
     case 'secondHalf':
@@ -183,6 +190,125 @@ function resolveDateRange_(opt, settings) {
     case 'fullYear':
     default:
       return { from: start, to: end, label: '年度 (' + start + ' ～ ' + end + ')' };
+  }
+}
+
+/**
+ * 四半期(Q1=4-6月, Q2=7-9月, Q3=10-12月, Q4=翌年1-3月)の期間を返す。
+ */
+function quarterRange_(fiscalYear, quarter) {
+  const fy = Number(fiscalYear);
+  const q = Number(quarter);
+  const startMonths = { 1: 4, 2: 7, 3: 10, 4: 1 };
+  const endMonths   = { 1: 6, 2: 9, 3: 12, 4: 3 };
+  const startYearOffset = { 1: 0, 2: 0, 3: 0, 4: 1 };
+  const endYearOffset   = { 1: 0, 2: 0, 3: 0, 4: 1 };
+  const sy = fy + startYearOffset[q];
+  const ey = fy + endYearOffset[q];
+  const sm = startMonths[q];
+  const em = endMonths[q];
+  const lastDays = { 1: 31, 2: 28, 3: 31, 4: 30, 5: 31, 6: 30, 7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31 };
+  let lastDay = lastDays[em];
+  if (em === 2) {
+    const isLeap = (ey % 4 === 0 && ey % 100 !== 0) || ey % 400 === 0;
+    if (isLeap) lastDay = 29;
+  }
+  const pad = n => String(n).padStart(2, '0');
+  return {
+    from: sy + '-' + pad(sm) + '-01',
+    to:   ey + '-' + pad(em) + '-' + pad(lastDay),
+    fiscalYear: fy,
+    quarter: q
+  };
+}
+
+/**
+ * 2年分(8四半期)の四半期サマリを一気に返す。
+ * 各四半期について、出席延べ人数・日当対象出席・日当総額・ブロック別集計を含む。
+ * @param {object} opt { startFiscalYear: 2026 }
+ */
+function api_summarizeQuartersOver2Years(opt) {
+  opt = opt || {};
+  try {
+    const settings = readSettings_();
+    const baseYear = Number(opt.startFiscalYear) || Number(settings['年度']) || FISCAL_YEAR_DEFAULT.YEAR;
+    const daily = Number(settings['日当単価']) || FISCAL_YEAR_DEFAULT.DAILY_ALLOWANCE;
+
+    const memRes = api_listMembers();
+    if (!memRes.ok) throw new Error(memRes.error);
+    const members = memRes.data;
+
+    const quarters = [];
+    for (let yOff = 0; yOff < 2; yOff++) {
+      for (let q = 1; q <= 4; q++) {
+        const fy = baseYear + yOff;
+        const range = quarterRange_(fy, q);
+        const evRes = api_listEvents({ dateFrom: range.from, dateTo: range.to });
+        if (!evRes.ok) throw new Error(evRes.error);
+        const events = evRes.data;
+        const eventsById = {};
+        events.forEach(e => { eventsById[e.id] = e; });
+
+        const att = getSheet_(SHEET_NAMES.ATTENDANCE);
+        const allAtt = att && att.getLastRow() >= 2
+          ? att.getRange(2, 1, att.getLastRow() - 1, 7).getValues()
+          : [];
+
+        const districtTotals = {};
+        let attendCount = 0;
+        let allowanceCount = 0;
+        let allowanceAmount = 0;
+
+        const memberDistrict = {};
+        members.forEach(m => { memberDistrict[m.id] = m.district || '未設定'; });
+
+        allAtt.forEach(row => {
+          const eventId = Number(row[1]);
+          const memberId = Number(row[2]);
+          const status = row[3];
+          if (status !== ATTENDANCE_STATUS.ATTENDED) return;
+          const ev = eventsById[eventId];
+          if (!ev) return;
+          attendCount++;
+          const dist = memberDistrict[memberId] || '未設定';
+          if (!districtTotals[dist]) {
+            districtTotals[dist] = { district: dist, attendCount: 0, allowanceCount: 0, allowanceAmount: 0 };
+          }
+          districtTotals[dist].attendCount++;
+          if (ev.dailyAllowance) {
+            allowanceCount++;
+            allowanceAmount += daily;
+            districtTotals[dist].allowanceCount++;
+            districtTotals[dist].allowanceAmount += daily;
+          }
+        });
+
+        quarters.push({
+          fiscalYear: fy,
+          quarter: q,
+          label: fy + '年度 Q' + q,
+          range: range,
+          totalEvents: events.length,
+          totalAllowanceEvents: events.filter(e => e.dailyAllowance).length,
+          attendCount: attendCount,
+          allowanceCount: allowanceCount,
+          allowanceAmount: allowanceAmount,
+          districts: Object.values(districtTotals)
+        });
+      }
+    }
+
+    return {
+      ok: true,
+      data: {
+        startFiscalYear: baseYear,
+        endFiscalYear: baseYear + 1,
+        dailyAllowance: daily,
+        quarters: quarters
+      }
+    };
+  } catch (e) {
+    return { ok: false, error: e.message };
   }
 }
 

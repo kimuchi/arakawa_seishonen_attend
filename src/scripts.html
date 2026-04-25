@@ -183,10 +183,11 @@ async function renderDashboard() {
   const upcoming = APP.events.filter(e => e.date >= today).slice(0, 6);
   const past = APP.events.filter(e => e.date < today).slice(-6).reverse();
 
-  // サマリ（年度全体）
+  const baseYear = Number(APP.settings['年度']) || 2026;
+  // 2年分通算サマリ
   let summary;
   try {
-    summary = await callApi('api_summarizeByMember', { period: 'fullYear' });
+    summary = await callApi('api_summarizeByMember', { period: 'twoFiscalYears', startFiscalYear: baseYear });
   } catch (e) {
     summary = null;
   }
@@ -201,7 +202,7 @@ async function renderDashboard() {
       <div class="stat">
         <div class="stat__label">登録イベント数</div>
         <div class="stat__value">${totalEvents}</div>
-        <div class="stat__desc">うち日当対象 ${totalAllowanceEvents} 件</div>
+        <div class="stat__desc">うち日当対象 ${totalAllowanceEvents} 件 / 2年分</div>
       </div>
       <div class="stat">
         <div class="stat__label">メンバ数</div>
@@ -211,12 +212,12 @@ async function renderDashboard() {
       <div class="stat">
         <div class="stat__label">出席記録 合計</div>
         <div class="stat__value">${totalAttendances}</div>
-        <div class="stat__desc">年度累計の出席延べ人数</div>
+        <div class="stat__desc">${baseYear}・${baseYear + 1}年度の延べ人数</div>
       </div>
-      <div class="stat">
-        <div class="stat__label">日当総額 (年度累計)</div>
-        <div class="stat__value stat__value--money">${totalAllowance.toLocaleString()}</div>
-        <div class="stat__desc">@ ¥${APP.settings['日当単価'] || 500}</div>
+      <div class="stat stat--hero">
+        <div class="stat__label">日当総額 (2年通算)</div>
+        <div class="stat__value stat__value--money stat__value--xl">${totalAllowance.toLocaleString()}</div>
+        <div class="stat__desc">@ ¥${APP.settings['日当単価'] || 500} / ${baseYear}・${baseYear + 1}年度</div>
       </div>
     </div>
 
@@ -497,7 +498,8 @@ async function renderEventsTab() {
       <p class="card__subtitle">イベントの追加・編集・削除。Script Properties の ICS URL から一括取込ができます。</p>
       <div class="btn-group mb-4">
         <button class="btn btn--primary" id="btnAddEvent">+ 新規イベント</button>
-        <button class="btn" id="btnImportIcsAuto">🔄 ICSを自動取込</button>
+        <button class="btn" id="btnImportIcs1y">🔄 ICSを1年分取込</button>
+        <button class="btn btn--ghost" id="btnImportIcs2y">📥 ICSを2年分取込</button>
       </div>
 
       <div class="filter-bar">
@@ -520,7 +522,8 @@ async function renderEventsTab() {
     </div>
   `;
   document.getElementById('btnAddEvent').addEventListener('click', () => openEventModal());
-  document.getElementById('btnImportIcsAuto').addEventListener('click', runConfiguredIcsImport);
+  document.getElementById('btnImportIcs1y').addEventListener('click', () => runConfiguredIcsImport(1));
+  document.getElementById('btnImportIcs2y').addEventListener('click', () => runConfiguredIcsImport(2));
   ['evFilterCategory', 'evFilterAllowance', 'evFilterTitle'].forEach(id => {
     const el = document.getElementById(id);
     el.addEventListener('change', renderEventRows_);
@@ -711,10 +714,26 @@ function openEventModal(ev) {
   });
 }
 
-async function runConfiguredIcsImport() {
-  const from = APP.settings['年度開始日'] || '2026-04-01';
-  const to = APP.settings['年度終了日'] || '2027-03-31';
-  if (!confirm(`Script Properties の ICS_IMPORT_URL から取り込みます。\n対象期間: ${from} ～ ${to}\n実行しますか？`)) return;
+// ICS取込 (1年/2年で範囲を切替)
+async function runConfiguredIcsImport(spanYears) {
+  const baseStart = APP.settings['年度開始日'] || '2026-04-01';
+  const baseEnd = APP.settings['年度終了日'] || '2027-03-31';
+  const span = (spanYears === 2) ? 2 : 1;
+  let from = baseStart;
+  let to = baseEnd;
+  if (span === 2) {
+    // 2年分: 年度開始 〜 年度終了の翌年同日 (2026-04-01 〜 2028-03-31 の想定)
+    const endDate = new Date(baseEnd);
+    if (!isNaN(endDate.getTime())) {
+      endDate.setFullYear(endDate.getFullYear() + 1);
+      const y = endDate.getFullYear();
+      const m = String(endDate.getMonth() + 1).padStart(2, '0');
+      const d = String(endDate.getDate()).padStart(2, '0');
+      to = `${y}-${m}-${d}`;
+    }
+  }
+  const label = span === 2 ? '2年分' : '1年分';
+  if (!confirm(`Script Properties の ICS_IMPORT_URL から${label}取り込みます。\n対象期間: ${from} ～ ${to}\n実行しますか？`)) return;
   showLoader(true);
   try {
     const r = await callApi('api_importFromConfiguredIcs', from, to, { autoClassify: true });
@@ -893,20 +912,35 @@ function openMemberModal(m) {
 // ==========================================================
 async function renderSummaryTab() {
   const panel = document.getElementById('tab-summary');
+  const baseYear = Number(APP.settings['年度']) || 2026;
   panel.innerHTML = `
     <div class="card">
       <h2 class="card__title">📈 集計</h2>
-      <p class="card__subtitle">人別の出席数・日当額を確認できます。上半期/下半期でも集計可能です。</p>
+      <p class="card__subtitle">人別の出席数・日当額を確認できます。年度・上下半期・四半期(2年分=8四半期)・任意期間に対応。</p>
       <div class="filter-bar">
         <label>期間
           <select id="sumPeriod">
-            <option value="fullYear">年度通算</option>
-            <option value="fiscalCurrent">設定年度 (例: 2026年度)</option>
-            <option value="fiscalNext">次年度 (例: 2027年度)</option>
-            <option value="twoFiscalYears">2年度通算 (2026・2027年度)</option>
+            <option value="twoFiscalYears">2年度通算 (${baseYear}・${baseYear + 1}年度)</option>
+            <option value="fiscalCurrent">設定年度 (${baseYear}年度)</option>
+            <option value="fiscalNext">次年度 (${baseYear + 1}年度)</option>
             <option value="firstHalf">上半期</option>
             <option value="secondHalf">下半期</option>
+            <option value="quarter">四半期</option>
             <option value="custom">カスタム</option>
+          </select>
+        </label>
+        <label id="sumQuarterWrap" class="hidden">年度
+          <select id="sumQuarterFy">
+            <option value="${baseYear}">${baseYear}年度</option>
+            <option value="${baseYear + 1}">${baseYear + 1}年度</option>
+          </select>
+        </label>
+        <label id="sumQuarterQWrap" class="hidden">Q
+          <select id="sumQuarterQ">
+            <option value="1">Q1 (4-6月)</option>
+            <option value="2">Q2 (7-9月)</option>
+            <option value="3">Q3 (10-12月)</option>
+            <option value="4">Q4 (1-3月)</option>
           </select>
         </label>
         <label id="sumFromWrap" class="hidden">開始
@@ -920,14 +954,25 @@ async function renderSummaryTab() {
       </div>
       <div id="summaryResult"></div>
     </div>
+    <div class="card">
+      <h2 class="card__title">🗓️ 四半期一覧 (2年分・8四半期)</h2>
+      <p class="card__subtitle">${baseYear}年度Q1 から ${baseYear + 1}年度Q4 まで、四半期ごとのブロック別日当を一望できます。</p>
+      <div class="btn-group mb-4">
+        <button class="btn btn--primary btn--sm" id="btnRunQuarters">四半期一覧を更新</button>
+      </div>
+      <div id="quartersResult" class="text-muted">「四半期一覧を更新」を押してください。</div>
+    </div>
   `;
   document.getElementById('sumPeriod').addEventListener('change', (e) => {
-    const isCustom = e.target.value === 'custom';
-    document.getElementById('sumFromWrap').classList.toggle('hidden', !isCustom);
-    document.getElementById('sumToWrap').classList.toggle('hidden', !isCustom);
+    const v = e.target.value;
+    document.getElementById('sumFromWrap').classList.toggle('hidden', v !== 'custom');
+    document.getElementById('sumToWrap').classList.toggle('hidden', v !== 'custom');
+    document.getElementById('sumQuarterWrap').classList.toggle('hidden', v !== 'quarter');
+    document.getElementById('sumQuarterQWrap').classList.toggle('hidden', v !== 'quarter');
   });
   document.getElementById('btnRunSummary').addEventListener('click', runSummary);
   document.getElementById('btnCsvSummary').addEventListener('click', downloadSummaryCsv);
+  document.getElementById('btnRunQuarters').addEventListener('click', runQuartersOverview);
   runSummary();
 }
 
@@ -940,6 +985,11 @@ async function runSummary() {
   if (period === 'fiscalCurrent') query = { period: 'fiscalYear', fiscalYear: baseYear };
   if (period === 'fiscalNext') query = { period: 'fiscalYear', fiscalYear: baseYear + 1 };
   if (period === 'twoFiscalYears') query = { period: 'twoFiscalYears', startFiscalYear: baseYear };
+  if (period === 'quarter') {
+    const fy = Number(document.getElementById('sumQuarterFy').value) || baseYear;
+    const q = Number(document.getElementById('sumQuarterQ').value) || 1;
+    query = { period: 'quarter', fiscalYear: fy, quarter: q };
+  }
   showLoader(true);
   try {
     const res = await callApi('api_summarizeByMember', query);
@@ -988,40 +1038,85 @@ async function runSummary() {
           </tbody>
         </table>
       </div>
-      <div class="card mt-4">
+      <div class="card mt-4 card--accent">
         <h3 class="card__title">🏷️ ブロック別（日当）合計</h3>
-        <div class="tbl-wrap">
-          <table class="tbl tbl--compact">
-            <thead>
-              <tr>
-                <th>ブロック</th>
-                <th class="num">出席回数</th>
-                <th class="num">日当対象出席</th>
-                <th class="num">金額</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${ds.map(d => `
-                <tr>
-                  <td><strong>${esc(d.district)}</strong></td>
-                  <td class="num">${d.attendCount}</td>
-                  <td class="num">${d.allowanceCount}</td>
-                  <td class="num">¥${d.allowanceAmount.toLocaleString()}</td>
-                </tr>
-              `).join('')}
-              <tr style="background:#eff6ff; font-weight:700;">
-                <td class="num">合計</td>
-                <td class="num">${ds.reduce((a,d)=>a+d.attendCount,0)}</td>
-                <td class="num">${ds.reduce((a,d)=>a+d.allowanceCount,0)}</td>
-                <td class="num">¥${ds.reduce((a,d)=>a+d.allowanceAmount,0).toLocaleString()}</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="block-grid">
+          ${ds.map((d, idx) => `
+            <div class="block-card block-card--c${idx % 5}">
+              <div class="block-card__name">${esc(d.district)}</div>
+              <div class="block-card__amount">¥${d.allowanceAmount.toLocaleString()}</div>
+              <div class="block-card__sub">
+                <span>出席 ${d.attendCount}回</span>
+                <span>日当対象 ${d.allowanceCount}回</span>
+              </div>
+            </div>
+          `).join('')}
+          <div class="block-card block-card--total">
+            <div class="block-card__name">全ブロック合計</div>
+            <div class="block-card__amount">¥${ds.reduce((a,d)=>a+d.allowanceAmount,0).toLocaleString()}</div>
+            <div class="block-card__sub">
+              <span>出席 ${ds.reduce((a,d)=>a+d.attendCount,0)}回</span>
+              <span>日当対象 ${ds.reduce((a,d)=>a+d.allowanceCount,0)}回</span>
+            </div>
+          </div>
         </div>
       </div>
     `;
   } catch (e) {
     toast('集計エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function runQuartersOverview() {
+  const baseYear = Number(APP.settings['年度']) || 2026;
+  const box = document.getElementById('quartersResult');
+  box.innerHTML = '<div class="text-muted">読み込み中...</div>';
+  showLoader(true);
+  try {
+    const res = await callApi('api_summarizeQuartersOver2Years', { startFiscalYear: baseYear });
+    const qs = res.quarters;
+    const grandTotal = qs.reduce((a, q) => a + q.allowanceAmount, 0);
+    box.innerHTML = `
+      <div class="quarter-grid">
+        ${qs.map(q => {
+          const districts = (q.districts || []).slice().sort((a,b) => b.allowanceAmount - a.allowanceAmount);
+          return `
+            <div class="quarter-card">
+              <div class="quarter-card__head">
+                <div class="quarter-card__title">${esc(q.label)}</div>
+                <div class="quarter-card__range">${esc(q.range.from)} 〜 ${esc(q.range.to)}</div>
+              </div>
+              <div class="quarter-card__amount">${q.allowanceAmount.toLocaleString()}</div>
+              <div class="quarter-card__meta">
+                <span class="pill pill--muted">イベント ${q.totalEvents}件</span>
+                <span class="pill pill--ok">日当対象 ${q.totalAllowanceEvents}件</span>
+                <span class="pill">出席延べ ${q.attendCount}人</span>
+              </div>
+              <div class="quarter-card__blocks">
+                ${districts.length === 0 ? '<div class="text-muted text-small">出席記録がありません</div>' :
+                  districts.map(d => `
+                    <div class="quarter-card__block">
+                      <span class="quarter-card__block-name">${esc(d.district)}</span>
+                      <span class="quarter-card__block-amount">¥${d.allowanceAmount.toLocaleString()}</span>
+                    </div>
+                  `).join('')
+                }
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+      <div class="stat stat--hero mt-4">
+        <div class="stat__label">2年合計 (8四半期)</div>
+        <div class="stat__value stat__value--money stat__value--xl">${grandTotal.toLocaleString()}</div>
+        <div class="stat__desc">@¥${res.dailyAllowance} / ${baseYear}年度Q1 〜 ${baseYear + 1}年度Q4</div>
+      </div>
+    `;
+  } catch (e) {
+    box.innerHTML = '<div class="toast toast--error">四半期集計エラー: ' + esc(e.message) + '</div>';
+    toast('四半期集計エラー: ' + e.message, 'error');
   } finally {
     showLoader(false);
   }
