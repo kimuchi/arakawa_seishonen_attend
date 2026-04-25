@@ -70,6 +70,7 @@ function api_summarizeByMember(opt) {
 
     const data = Object.values(summary).sort((a, b) => (a.no || 9999) - (b.no || 9999));
     const districtTotals = {};
+    const districtOrder = [];
     data.forEach(m => {
       const district = m.district || '未設定';
       if (!districtTotals[district]) {
@@ -79,12 +80,20 @@ function api_summarizeByMember(opt) {
           allowanceCount: 0,
           allowanceAmount: 0
         };
+        districtOrder.push(district);
       }
       districtTotals[district].attendCount += m.attendCount;
       districtTotals[district].allowanceCount += m.allowanceCount;
       districtTotals[district].allowanceAmount += m.allowanceAmount;
     });
-    const districtSummary = Object.values(districtTotals).sort((a, b) => String(a.district).localeCompare(String(b.district), 'ja'));
+    const districtSummary = Object.values(districtTotals).sort((a, b) => {
+      const ai = districtOrder.indexOf(a.district);
+      const bi = districtOrder.indexOf(b.district);
+      if (ai >= 0 && bi >= 0) return ai - bi;
+      if (ai >= 0) return -1;
+      if (bi >= 0) return 1;
+      return String(a.district).localeCompare(String(b.district), 'ja');
+    });
     return {
       ok: true,
       data: {
