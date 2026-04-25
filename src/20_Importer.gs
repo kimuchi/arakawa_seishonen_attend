@@ -1,42 +1,20 @@
 /**
  * 20_Importer.gs
  * イベントの一括取り込み。
- *  - Googleカレンダー(CalendarApp)からの取り込み
- *  - ICSファイルURLからの取り込み
+ *  - Script Propertiesで指定したICS URLからの取り込み
+ *  - 任意ICSファイルURLからの取り込み（内部利用）
  *  - 分類の自動推定（イベント名に基づく）
  *
  * 取り込み結果は「イベント」シートに追記される。
- * 同じGイベントIDがすでに登録済みの場合はスキップする（重複登録を防ぐ）。
+ * 同じ日付 + 同じイベント名がすでに登録済みの場合はスキップする（重複登録を防ぐ）。
  */
 
 /**
- * GoogleカレンダーIDを指定してイベントをインポート。
- * @param {string} calendarId カレンダーID（メールアドレス形式 or 〜@group.calendar.google.com）
- * @param {string} startDateStr 開始日 (yyyy-MM-dd)
- * @param {string} endDateStr 終了日 (yyyy-MM-dd)
- * @param {object} options { autoClassify: true, defaultAllowance: false }
- * @return {object} { imported, skipped, events: [...] }
+ * Script Propertiesに設定されたICS URLからイベントをインポート。
  */
-function importFromGoogleCalendar(calendarId, startDateStr, endDateStr, options) {
-  options = options || {};
-  const start = parseDate_(startDateStr);
-  const end = parseDate_(endDateStr);
-  if (!start || !end) throw new Error('開始日・終了日を yyyy-MM-dd 形式で指定してください。');
-  const cal = calendarId ? CalendarApp.getCalendarById(calendarId) : CalendarApp.getDefaultCalendar();
-  if (!cal) throw new Error('カレンダーが見つかりません: ' + calendarId);
-
-  const events = cal.getEvents(start, new Date(end.getTime() + 24 * 60 * 60 * 1000));
-  const normalized = events.map(ev => ({
-    gEventId: ev.getId(),
-    gCalendarId: cal.getId(),
-    title: ev.getTitle(),
-    startTime: ev.getStartTime(),
-    endTime: ev.getEndTime(),
-    allDay: ev.isAllDayEvent(),
-    location: ev.getLocation() || '',
-    description: ev.getDescription() || ''
-  }));
-  return insertEvents_(normalized, options);
+function importFromConfiguredIcs(startDateStr, endDateStr, options) {
+  const icsUrl = getConfiguredIcsUrl_();
+  return importFromIcsUrl(icsUrl, startDateStr, endDateStr, options);
 }
 
 /**
@@ -72,9 +50,17 @@ function importFromIcsUrl(icsUrl, startDateStr, endDateStr, options) {
   return insertEvents_(filtered, options);
 }
 
+function getConfiguredIcsUrl_() {
+  const url = PropertiesService.getScriptProperties().getProperty(PROP_KEYS.ICS_IMPORT_URL);
+  if (!url) {
+    throw new Error('Script Properties に ICS_IMPORT_URL が設定されていません。');
+  }
+  return url;
+}
+
 /**
  * イベント配列を「イベント」シートに書き込む。
- * 既存のGイベントIDと重複するものはスキップ。
+ * 既存の「日付 + イベント名」と重複するものはスキップ。
  * autoClassify: trueなら分類を自動推定する。
  */
 function insertEvents_(eventList, options) {
@@ -84,8 +70,12 @@ function insertEvents_(eventList, options) {
 
     const existingObjs = sheetToObjects_(sheet);
     const existingIds = {};
+    const existingDateTitle = {};
     existingObjs.forEach(r => {
       if (r['GイベントID']) existingIds[String(r['GイベントID'])] = true;
+      const date = formatDate_(r['日付']);
+      const title = String(r['イベント名'] || '').trim().toLowerCase();
+      if (date && title) existingDateTitle[date + '|' + title] = true;
     });
 
     let nextId = generateNextId_(sheet, 1);
@@ -97,10 +87,14 @@ function insertEvents_(eventList, options) {
 
     eventList.forEach(ev => {
       if (ev.gEventId && existingIds[ev.gEventId]) { skipped++; return; }
+      const eventDate = formatDate_(ev.startTime);
+      const eventTitle = String(ev.title || '(無題)').trim().toLowerCase();
+      const dupKey = eventDate + '|' + eventTitle;
+      if (existingDateTitle[dupKey]) { skipped++; return; }
       const classify = autoClassify ? classifyEventName_(ev.title) : { category: 'その他', subcategory: 'その他', dailyAllowance: defaultAllowance };
       const row = [
         nextId++,
-        formatDate_(ev.startTime),
+        eventDate,
         ev.allDay ? '' : formatTime_(ev.startTime),
         ev.allDay ? '' : formatTime_(ev.endTime),
         !!ev.allDay,
@@ -115,6 +109,7 @@ function insertEvents_(eventList, options) {
         true
       ];
       rows.push(row);
+      existingDateTitle[dupKey] = true;
       imported.push({
         id: row[0], date: row[1], title: row[5], category: row[6], subcategory: row[7]
       });
@@ -288,33 +283,9 @@ function unescapeIcsText_(s) {
 // ===========================================================
 // UIから呼び出すための薄いラッパ
 // ===========================================================
-function api_importFromGoogleCalendar(calendarId, startDateStr, endDateStr, options) {
+function api_importFromConfiguredIcs(startDateStr, endDateStr, options) {
   try {
-    return { ok: true, data: importFromGoogleCalendar(calendarId, startDateStr, endDateStr, options) };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-}
-
-function api_importFromIcsUrl(icsUrl, startDateStr, endDateStr, options) {
-  try {
-    return { ok: true, data: importFromIcsUrl(icsUrl, startDateStr, endDateStr, options) };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-}
-
-function api_listAvailableCalendars() {
-  try {
-    const cals = CalendarApp.getAllCalendars();
-    return {
-      ok: true,
-      data: cals.map(c => ({
-        id: c.getId(),
-        name: c.getName(),
-        isOwned: c.isOwnedByMe()
-      }))
-    };
+    return { ok: true, data: importFromConfiguredIcs(startDateStr, endDateStr, options) };
   } catch (e) {
     return { ok: false, error: e.message };
   }
