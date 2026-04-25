@@ -901,6 +901,9 @@ async function renderSummaryTab() {
         <label>期間
           <select id="sumPeriod">
             <option value="fullYear">年度通算</option>
+            <option value="fiscalCurrent">設定年度 (例: 2026年度)</option>
+            <option value="fiscalNext">次年度 (例: 2027年度)</option>
+            <option value="twoFiscalYears">2年度通算 (2026・2027年度)</option>
             <option value="firstHalf">上半期</option>
             <option value="secondHalf">下半期</option>
             <option value="custom">カスタム</option>
@@ -932,12 +935,18 @@ async function runSummary() {
   const period = document.getElementById('sumPeriod').value;
   const from = document.getElementById('sumFrom').value;
   const to = document.getElementById('sumTo').value;
+  const baseYear = Number(APP.settings['年度']) || 2026;
+  let query = { period: period, dateFrom: from, dateTo: to };
+  if (period === 'fiscalCurrent') query = { period: 'fiscalYear', fiscalYear: baseYear };
+  if (period === 'fiscalNext') query = { period: 'fiscalYear', fiscalYear: baseYear + 1 };
+  if (period === 'twoFiscalYears') query = { period: 'twoFiscalYears', startFiscalYear: baseYear };
   showLoader(true);
   try {
-    const res = await callApi('api_summarizeByMember', { period: period, dateFrom: from, dateTo: to });
+    const res = await callApi('api_summarizeByMember', query);
     APP._lastSummary = res;
     const box = document.getElementById('summaryResult');
     const ms = res.members;
+    const ds = res.districts || [];
     const total = ms.reduce((a, m) => a + m.allowanceAmount, 0);
     box.innerHTML = `
       <div class="grid grid--3 mb-4">
@@ -979,6 +988,37 @@ async function runSummary() {
           </tbody>
         </table>
       </div>
+      <div class="card mt-4">
+        <h3 class="card__title">🏷️ ブロック別（日当）合計</h3>
+        <div class="tbl-wrap">
+          <table class="tbl tbl--compact">
+            <thead>
+              <tr>
+                <th>ブロック</th>
+                <th class="num">出席回数</th>
+                <th class="num">日当対象出席</th>
+                <th class="num">金額</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${ds.map(d => `
+                <tr>
+                  <td><strong>${esc(d.district)}</strong></td>
+                  <td class="num">${d.attendCount}</td>
+                  <td class="num">${d.allowanceCount}</td>
+                  <td class="num">¥${d.allowanceAmount.toLocaleString()}</td>
+                </tr>
+              `).join('')}
+              <tr style="background:#eff6ff; font-weight:700;">
+                <td class="num">合計</td>
+                <td class="num">${ds.reduce((a,d)=>a+d.attendCount,0)}</td>
+                <td class="num">${ds.reduce((a,d)=>a+d.allowanceCount,0)}</td>
+                <td class="num">¥${ds.reduce((a,d)=>a+d.allowanceAmount,0).toLocaleString()}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     `;
   } catch (e) {
     toast('集計エラー: ' + e.message, 'error');
@@ -994,6 +1034,13 @@ function downloadSummaryCsv() {
   const rows = res.members.map(m => [m.no || '', m.district, m.name, m.term, m.role, m.jissen, m.senmon, m.attendCount, m.allowanceCount, m.allowanceAmount]);
   const total = res.members.reduce((a,m)=>a+m.allowanceAmount,0);
   rows.push(['合計','','','','','','',res.members.reduce((a,m)=>a+m.attendCount,0), res.members.reduce((a,m)=>a+m.allowanceCount,0), total]);
+  rows.push([]);
+  rows.push(['ブロック別合計']);
+  rows.push(['ブロック','出席回数','日当対象出席','金額']);
+  (res.districts || []).forEach(d => {
+    rows.push([d.district, d.attendCount, d.allowanceCount, d.allowanceAmount]);
+  });
+  rows.push(['合計', (res.districts || []).reduce((a,d)=>a+d.attendCount,0), (res.districts || []).reduce((a,d)=>a+d.allowanceCount,0), (res.districts || []).reduce((a,d)=>a+d.allowanceAmount,0)]);
   const csv = [headers].concat(rows).map(r => r.map(v => {
     const s = String(v == null ? '' : v);
     return /[,"\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;

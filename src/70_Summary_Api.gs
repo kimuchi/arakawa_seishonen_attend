@@ -69,6 +69,22 @@ function api_summarizeByMember(opt) {
     });
 
     const data = Object.values(summary).sort((a, b) => (a.no || 9999) - (b.no || 9999));
+    const districtTotals = {};
+    data.forEach(m => {
+      const district = m.district || '未設定';
+      if (!districtTotals[district]) {
+        districtTotals[district] = {
+          district: district,
+          attendCount: 0,
+          allowanceCount: 0,
+          allowanceAmount: 0
+        };
+      }
+      districtTotals[district].attendCount += m.attendCount;
+      districtTotals[district].allowanceCount += m.allowanceCount;
+      districtTotals[district].allowanceAmount += m.allowanceAmount;
+    });
+    const districtSummary = Object.values(districtTotals).sort((a, b) => String(a.district).localeCompare(String(b.district), 'ja'));
     return {
       ok: true,
       data: {
@@ -76,7 +92,8 @@ function api_summarizeByMember(opt) {
         dailyAllowance: daily,
         totalEvents: events.length,
         totalAllowanceEvents: events.filter(e => e.dailyAllowance).length,
-        members: data
+        members: data,
+        districts: districtSummary
       }
     };
   } catch (e) {
@@ -134,6 +151,20 @@ function resolveDateRange_(opt, settings) {
   })();
 
   switch (opt.period) {
+    case 'fiscalYear': {
+      const fy = Number(opt.fiscalYear);
+      if (!fy) throw new Error('集計年度が不正です。');
+      const from = fy + '-04-01';
+      const to = (fy + 1) + '-03-31';
+      return { from: from, to: to, label: fy + '年度 (' + from + ' ～ ' + to + ')' };
+    }
+    case 'twoFiscalYears': {
+      const fy = Number(opt.startFiscalYear);
+      if (!fy) throw new Error('開始年度が不正です。');
+      const from = fy + '-04-01';
+      const to = (fy + 2) + '-03-31';
+      return { from: from, to: to, label: fy + '年度〜' + (fy + 1) + '年度 (' + from + ' ～ ' + to + ')' };
+    }
     case 'firstHalf':
       return { from: start, to: firstHalfEnd, label: '上半期 (' + start + ' ～ ' + firstHalfEnd + ')' };
     case 'secondHalf':
