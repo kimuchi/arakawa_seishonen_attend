@@ -125,52 +125,69 @@ function insertEvents_(eventList, options) {
 
 /**
  * イベント名から分類を自動推定する。
- * シンプルなキーワードマッチだが、前年度のイベント名パターンをカバー。
+ * シートに登録された「ICS取込ルール」を表示順で評価する。
+ * シートが空・未初期化の場合は INITIAL_ICS_RULES をフォールバック。
  * @return {{category:string, subcategory:string, dailyAllowance:boolean}}
  */
 function classifyEventName_(name) {
   const n = String(name || '');
-  const map = [
-    // ブロック
-    { re: /(ブロック研修|城北ブロック|ブロック会議)/, c: 'ブロック', s: '全ブロック合同', a: true },
-    // 実践部会(タグ付き)
-    { re: /【校庭】|校庭利用|みんなで遊ぼう/, c: '実践部会', s: '校庭', a: true },
-    { re: /【少年】|少年企画|少年部会/, c: '実践部会', s: '少年', a: true },
-    { re: /【青年】|青年部会|青年企画/, c: '実践部会', s: '青年', a: true },
-    // 専門部会(タグ付き)
-    { re: /【調査研修】|調査研修部会/, c: '専門部会', s: '調査研修', a: true },
-    { re: /【総務】|総務部会/, c: '専門部会', s: '総務', a: true },
-    { re: /【広報】|広報部会/, c: '専門部会', s: '広報', a: true },
-    // 関連団体
-    { re: /【都連】|都連|東京都青少年委員|青少年委員大会/, c: '関連団体', s: '都連(東京都青少年委員会連合会)', a: true },
-    { re: /荒小連|中高生キャンプ/, c: '関連団体', s: '荒小連(荒川小学生連合)', a: true },
-    { re: /子ども会/, c: '関連団体', s: '子ども会', a: true },
-    { re: /ロータリー/, c: '関連団体', s: 'ロータリークラブ', a: false },
-    { re: /アリストック/, c: '関連団体', s: 'アリストック', a: true },
-    { re: /青少年問題協議/, c: '関連団体', s: '青少年問題協議会', a: true },
-    { re: /薬物乱用/, c: '関連団体', s: '薬物乱用防止推進協議会', a: true },
-    { re: /社会を明るくする/, c: '関連団体', s: '社会を明るくする運動', a: true },
-    // 全体事業
-    { re: /定例会/, c: '全体事業', s: '定例会', a: true },
-    { re: /(荒青連|青少年委員連絡会)総会|総会・懇親会|総会/, c: '全体事業', s: '総会', a: true },
-    { re: /チャレンジ共和国|プレチャレンジ/, c: '全体事業', s: 'チャレンジ共和国', a: true },
-    { re: /チャレンジキャンプ/, c: '全体事業', s: 'チャレンジキャンプ', a: true },
-    { re: /さくら教室|さくらお楽しみ/, c: '全体事業', s: 'さくら教室', a: true },
-    { re: /川の手|あらかわまつり/, c: '全体事業', s: '川の手あらかわまつり', a: true },
-    { re: /二十歳のつどい|はたちのつどい/, c: '全体事業', s: '二十歳のつどい', a: true },
-    { re: /退任式/, c: '全体事業', s: '退任式', a: true },
-    { re: /宿泊研修/, c: '全体事業', s: '宿泊研修', a: true },
-    { re: /日帰り研修/, c: '全体事業', s: '日帰り研修', a: true },
-    { re: /忘年会|懇親会/, c: '全体事業', s: '忘年会・懇親会', a: false },
-    { re: /自主研修/, c: '全体事業', s: '自主研修', a: false },
-    { re: /タノシバ/, c: '全体事業', s: 'タノシバ', a: true }
-  ];
-  for (let i = 0; i < map.length; i++) {
-    if (map[i].re.test(n)) {
-      return { category: map[i].c, subcategory: map[i].s, dailyAllowance: map[i].a };
+  const rules = loadIcsRules_();
+  for (let i = 0; i < rules.length; i++) {
+    const r = rules[i];
+    if (!r.active) continue;
+    if (!r.pattern) continue;
+    let hit = false;
+    if (r.matchType === 'regex') {
+      try {
+        const re = new RegExp(r.pattern);
+        hit = re.test(n);
+      } catch (e) {
+        hit = false;
+      }
+    } else {
+      hit = n.indexOf(r.pattern) >= 0;
+    }
+    if (hit) {
+      return {
+        category: r.category || 'その他',
+        subcategory: r.subcategory || '',
+        dailyAllowance: !!r.defaultAllowance
+      };
     }
   }
   return { category: 'その他', subcategory: 'その他', dailyAllowance: false };
+}
+
+/**
+ * ICS取込ルールを「ICS取込ルール」シートから読み出す。
+ * シートが無い・空の場合は INITIAL_ICS_RULES をそのまま返す。
+ */
+function loadIcsRules_() {
+  try {
+    const sheet = getSheet_(SHEET_NAMES.ICS_RULES);
+    if (sheet && sheet.getLastRow() >= 2) {
+      const rows = sheetToObjects_(sheet);
+      const rules = rows.map(r => ({
+        pattern: String(r['パターン'] || ''),
+        matchType: String(r['マッチタイプ'] || 'contains'),
+        category: String(r['分類'] || ''),
+        subcategory: String(r['サブ分類'] || ''),
+        defaultAllowance: r['日当対象デフォルト'] === true,
+        order: Number(r['表示順']) || 0,
+        active: r['有効'] !== false
+      })).sort((a, b) => a.order - b.order);
+      return rules;
+    }
+  } catch (e) {}
+  return (typeof INITIAL_ICS_RULES !== 'undefined' ? INITIAL_ICS_RULES : []).map(r => ({
+    pattern: r.pattern,
+    matchType: r.matchType || 'contains',
+    category: r.category,
+    subcategory: r.subcategory,
+    defaultAllowance: !!r.defaultAllowance,
+    order: 0,
+    active: true
+  }));
 }
 
 // ===========================================================

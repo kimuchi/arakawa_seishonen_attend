@@ -923,24 +923,11 @@ async function renderSummaryTab() {
             <option value="twoFiscalYears">2年度通算 (${baseYear}・${baseYear + 1}年度)</option>
             <option value="fiscalCurrent">設定年度 (${baseYear}年度)</option>
             <option value="fiscalNext">次年度 (${baseYear + 1}年度)</option>
-            <option value="firstHalf">上半期</option>
-            <option value="secondHalf">下半期</option>
-            <option value="quarter">四半期</option>
+            <option value="y1h1">1年目 上半期 (${baseYear}年度 4-9月)</option>
+            <option value="y1h2">1年目 下半期 (${baseYear}年度 10月-翌3月)</option>
+            <option value="y2h1">2年目 上半期 (${baseYear + 1}年度 4-9月)</option>
+            <option value="y2h2">2年目 下半期 (${baseYear + 1}年度 10月-翌3月)</option>
             <option value="custom">カスタム</option>
-          </select>
-        </label>
-        <label id="sumQuarterWrap" class="hidden">年度
-          <select id="sumQuarterFy">
-            <option value="${baseYear}">${baseYear}年度</option>
-            <option value="${baseYear + 1}">${baseYear + 1}年度</option>
-          </select>
-        </label>
-        <label id="sumQuarterQWrap" class="hidden">Q
-          <select id="sumQuarterQ">
-            <option value="1">Q1 (4-6月)</option>
-            <option value="2">Q2 (7-9月)</option>
-            <option value="3">Q3 (10-12月)</option>
-            <option value="4">Q4 (1-3月)</option>
           </select>
         </label>
         <label id="sumFromWrap" class="hidden">開始
@@ -954,25 +941,14 @@ async function renderSummaryTab() {
       </div>
       <div id="summaryResult"></div>
     </div>
-    <div class="card">
-      <h2 class="card__title">🗓️ 四半期一覧 (2年分・8四半期)</h2>
-      <p class="card__subtitle">${baseYear}年度Q1 から ${baseYear + 1}年度Q4 まで、四半期ごとのブロック別日当を一望できます。</p>
-      <div class="btn-group mb-4">
-        <button class="btn btn--primary btn--sm" id="btnRunQuarters">四半期一覧を更新</button>
-      </div>
-      <div id="quartersResult" class="text-muted">「四半期一覧を更新」を押してください。</div>
-    </div>
   `;
   document.getElementById('sumPeriod').addEventListener('change', (e) => {
     const v = e.target.value;
     document.getElementById('sumFromWrap').classList.toggle('hidden', v !== 'custom');
     document.getElementById('sumToWrap').classList.toggle('hidden', v !== 'custom');
-    document.getElementById('sumQuarterWrap').classList.toggle('hidden', v !== 'quarter');
-    document.getElementById('sumQuarterQWrap').classList.toggle('hidden', v !== 'quarter');
   });
   document.getElementById('btnRunSummary').addEventListener('click', runSummary);
   document.getElementById('btnCsvSummary').addEventListener('click', downloadSummaryCsv);
-  document.getElementById('btnRunQuarters').addEventListener('click', runQuartersOverview);
   runSummary();
 }
 
@@ -985,11 +961,10 @@ async function runSummary() {
   if (period === 'fiscalCurrent') query = { period: 'fiscalYear', fiscalYear: baseYear };
   if (period === 'fiscalNext') query = { period: 'fiscalYear', fiscalYear: baseYear + 1 };
   if (period === 'twoFiscalYears') query = { period: 'twoFiscalYears', startFiscalYear: baseYear };
-  if (period === 'quarter') {
-    const fy = Number(document.getElementById('sumQuarterFy').value) || baseYear;
-    const q = Number(document.getElementById('sumQuarterQ').value) || 1;
-    query = { period: 'quarter', fiscalYear: fy, quarter: q };
-  }
+  if (period === 'y1h1') query = { period: 'fiscalYearHalf', fiscalYear: baseYear, half: 'h1' };
+  if (period === 'y1h2') query = { period: 'fiscalYearHalf', fiscalYear: baseYear, half: 'h2' };
+  if (period === 'y2h1') query = { period: 'fiscalYearHalf', fiscalYear: baseYear + 1, half: 'h1' };
+  if (period === 'y2h2') query = { period: 'fiscalYearHalf', fiscalYear: baseYear + 1, half: 'h2' };
   showLoader(true);
   try {
     const res = await callApi('api_summarizeByMember', query);
@@ -1069,59 +1044,6 @@ async function runSummary() {
   }
 }
 
-async function runQuartersOverview() {
-  const baseYear = Number(APP.settings['年度']) || 2026;
-  const box = document.getElementById('quartersResult');
-  box.innerHTML = '<div class="text-muted">読み込み中...</div>';
-  showLoader(true);
-  try {
-    const res = await callApi('api_summarizeQuartersOver2Years', { startFiscalYear: baseYear });
-    const qs = res.quarters;
-    const grandTotal = qs.reduce((a, q) => a + q.allowanceAmount, 0);
-    box.innerHTML = `
-      <div class="quarter-grid">
-        ${qs.map(q => {
-          const districts = (q.districts || []).slice().sort((a,b) => b.allowanceAmount - a.allowanceAmount);
-          return `
-            <div class="quarter-card">
-              <div class="quarter-card__head">
-                <div class="quarter-card__title">${esc(q.label)}</div>
-                <div class="quarter-card__range">${esc(q.range.from)} 〜 ${esc(q.range.to)}</div>
-              </div>
-              <div class="quarter-card__amount">${q.allowanceAmount.toLocaleString()}</div>
-              <div class="quarter-card__meta">
-                <span class="pill pill--muted">イベント ${q.totalEvents}件</span>
-                <span class="pill pill--ok">日当対象 ${q.totalAllowanceEvents}件</span>
-                <span class="pill">出席延べ ${q.attendCount}人</span>
-              </div>
-              <div class="quarter-card__blocks">
-                ${districts.length === 0 ? '<div class="text-muted text-small">出席記録がありません</div>' :
-                  districts.map(d => `
-                    <div class="quarter-card__block">
-                      <span class="quarter-card__block-name">${esc(d.district)}</span>
-                      <span class="quarter-card__block-amount">¥${d.allowanceAmount.toLocaleString()}</span>
-                    </div>
-                  `).join('')
-                }
-              </div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-      <div class="stat stat--hero mt-4">
-        <div class="stat__label">2年合計 (8四半期)</div>
-        <div class="stat__value stat__value--money stat__value--xl">${grandTotal.toLocaleString()}</div>
-        <div class="stat__desc">@¥${res.dailyAllowance} / ${baseYear}年度Q1 〜 ${baseYear + 1}年度Q4</div>
-      </div>
-    `;
-  } catch (e) {
-    box.innerHTML = '<div class="toast toast--error">四半期集計エラー: ' + esc(e.message) + '</div>';
-    toast('四半期集計エラー: ' + e.message, 'error');
-  } finally {
-    showLoader(false);
-  }
-}
-
 function downloadSummaryCsv() {
   const res = APP._lastSummary;
   if (!res) { toast('先に集計を実行してください'); return; }
@@ -1155,7 +1077,7 @@ function downloadSummaryCsv() {
 // ==========================================================
 // 設定タブ
 // ==========================================================
-function renderSettingsTab() {
+async function renderSettingsTab() {
   const panel = document.getElementById('tab-settings');
   const entries = Object.keys(APP.settings || {}).map(k => ({ key: k, value: APP.settings[k] }));
   panel.innerHTML = `
@@ -1177,11 +1099,62 @@ function renderSettingsTab() {
         </table>
       </div>
     </div>
+
+    <div class="card">
+      <h2 class="card__title">🏷️ 分類マスタ</h2>
+      <p class="card__subtitle">分類(大区分)とサブ分類の組み合わせ、日当対象デフォルト、表示順、有効/無効を管理します。表示順は ↑↓ で簡単に入れ替え可能。</p>
+      <div class="btn-group mb-4">
+        <button class="btn btn--primary btn--sm" id="btnAddClassification">+ 分類を追加</button>
+        <button class="btn btn--sm" id="btnReloadClassifications">🔄 再読込</button>
+      </div>
+      <div class="sortlist">
+        <div class="sortlist__row sortlist__row--header">
+          <div class="sortlist__handle">#</div>
+          <div>分類</div>
+          <div>サブ分類</div>
+          <div>日当デフォルト</div>
+          <div>有効</div>
+          <div>操作</div>
+        </div>
+        <div id="classificationList"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 class="card__title">📥 ICS取込ルール</h2>
+      <p class="card__subtitle">ICS取込時にイベント名と照合するキーワードを登録します。上から順に評価され、最初に当たったルールが使われます。「南千住→ブロック/南千住」「アリストック→関連団体/荒小連」のような独自ルールも追加できます。</p>
+      <div class="btn-group mb-4">
+        <button class="btn btn--primary btn--sm" id="btnAddRule">+ ルールを追加</button>
+        <button class="btn btn--sm" id="btnReloadRules">🔄 再読込</button>
+        <span class="pill pill--muted" id="rulesCount"></span>
+      </div>
+      <div class="filter-bar mb-4">
+        <label>イベント名でテスト
+          <input type="text" id="rulePreviewName" placeholder="例: 南千住ブロック会議" style="min-width: 240px;">
+        </label>
+        <button class="btn btn--sm" id="btnPreviewRule">テスト分類</button>
+        <span id="rulePreviewResult" class="pill pill--muted">テスト未実行</span>
+      </div>
+      <div class="sortlist sortlist--rules">
+        <div class="sortlist__row sortlist__row--header">
+          <div class="sortlist__handle">#</div>
+          <div>パターン</div>
+          <div>マッチ</div>
+          <div>分類 / サブ分類</div>
+          <div>日当デフォルト</div>
+          <div>有効</div>
+          <div>操作</div>
+        </div>
+        <div id="rulesList"></div>
+      </div>
+    </div>
+
     <div class="card">
       <h3 class="card__title">🔧 管理</h3>
       <div class="btn-group">
         <button class="btn" id="btnOpenSheetFromSettings">📄 スプレッドシートを開く</button>
         <button class="btn" id="btnReloadAll">🔄 データ再読込</button>
+        <button class="btn" id="btnReinitSheets">🛠️ シート再構築 (ICS取込ルールシート追加など)</button>
       </div>
     </div>
   `;
@@ -1218,6 +1191,324 @@ function renderSettingsTab() {
       showLoader(false);
     }
   });
+  document.getElementById('btnReinitSheets').addEventListener('click', async () => {
+    if (!confirm('既存データは保持したまま、不足しているシート(分類マスタ・ICS取込ルール等)を作成・補完します。実行しますか？')) return;
+    showLoader(true);
+    try {
+      await callApi('api_initializeSpreadsheet');
+      toast('シートを再構築しました', 'success');
+      await reloadAll();
+      renderSettingsTab();
+    } catch (e) {
+      toast('エラー: ' + e.message, 'error');
+    } finally {
+      showLoader(false);
+    }
+  });
+  document.getElementById('btnAddClassification').addEventListener('click', () => addClassificationRow());
+  document.getElementById('btnReloadClassifications').addEventListener('click', () => loadClassificationsEditor());
+  document.getElementById('btnAddRule').addEventListener('click', () => addRuleRow());
+  document.getElementById('btnReloadRules').addEventListener('click', () => loadRulesEditor());
+  document.getElementById('btnPreviewRule').addEventListener('click', previewRuleClassification);
+
+  await loadClassificationsEditor();
+  await loadRulesEditor();
+}
+
+// ----- 分類マスタ編集 -----
+async function loadClassificationsEditor() {
+  const box = document.getElementById('classificationList');
+  if (!box) return;
+  box.innerHTML = '<div class="text-muted">読み込み中...</div>';
+  try {
+    const data = await callApi('api_listClassificationsAll');
+    APP._classifications = data;
+    renderClassificationRows();
+  } catch (e) {
+    box.innerHTML = '<div class="toast toast--error">読み込みエラー: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderClassificationRows() {
+  const box = document.getElementById('classificationList');
+  if (!box) return;
+  const data = APP._classifications || [];
+  const cats = Array.from(new Set(data.map(c => c.category).filter(Boolean)));
+  const catOptions = (selected) => {
+    const all = Array.from(new Set(cats.concat(['ブロック', '実践部会', '専門部会', '関連団体', '全体事業', 'その他'])));
+    return all.map(c => `<option value="${esc(c)}" ${c === selected ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  };
+  box.innerHTML = data.map((c, i) => `
+    <div class="sortlist__row" data-cls-id="${c.id}">
+      <div class="sortlist__handle">${i + 1}</div>
+      <div>
+        <select data-cls-field="category">
+          <option value="">--</option>
+          ${catOptions(c.category)}
+        </select>
+      </div>
+      <input type="text" data-cls-field="subcategory" value="${esc(c.subcategory)}" placeholder="サブ分類名">
+      <label class="check-label">
+        <input type="checkbox" data-cls-field="defaultAllowance" ${c.defaultAllowance ? 'checked' : ''}>
+        日当
+      </label>
+      <label class="check-label">
+        <input type="checkbox" data-cls-field="active" ${c.active ? 'checked' : ''}>
+        有効
+      </label>
+      <div class="sortlist__row-actions">
+        <button class="icon-btn" title="上へ" data-cls-up="${c.id}" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="icon-btn" title="下へ" data-cls-down="${c.id}" ${i === data.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="icon-btn" title="保存" data-cls-save="${c.id}">💾</button>
+        <button class="icon-btn icon-btn--danger" title="削除" data-cls-del="${c.id}">🗑</button>
+      </div>
+    </div>
+  `).join('') || '<div class="empty"><div class="empty__icon">🏷️</div>分類が登録されていません</div>';
+
+  box.querySelectorAll('[data-cls-up]').forEach(b => b.addEventListener('click', (e) => moveClassification(Number(e.currentTarget.dataset.clsUp), -1)));
+  box.querySelectorAll('[data-cls-down]').forEach(b => b.addEventListener('click', (e) => moveClassification(Number(e.currentTarget.dataset.clsDown), +1)));
+  box.querySelectorAll('[data-cls-save]').forEach(b => b.addEventListener('click', (e) => saveClassificationRow(Number(e.currentTarget.dataset.clsSave))));
+  box.querySelectorAll('[data-cls-del]').forEach(b => b.addEventListener('click', (e) => deleteClassificationRow(Number(e.currentTarget.dataset.clsDel))));
+}
+
+function readClassificationRow(id) {
+  const row = document.querySelector(`[data-cls-id="${id}"]`);
+  if (!row) return null;
+  const get = (f) => row.querySelector(`[data-cls-field="${f}"]`);
+  return {
+    id: id,
+    category: get('category').value,
+    subcategory: get('subcategory').value.trim(),
+    defaultAllowance: get('defaultAllowance').checked,
+    active: get('active').checked,
+    order: 0
+  };
+}
+
+async function saveClassificationRow(id) {
+  const payload = readClassificationRow(id);
+  if (!payload) return;
+  if (!payload.category) { toast('分類を選択してください', 'error'); return; }
+  showLoader(true);
+  try {
+    await callApi('api_updateClassification', payload);
+    toast('保存しました', 'success');
+    await loadClassificationsEditor();
+    APP.classifications = await callApi('api_listClassifications');
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function deleteClassificationRow(id) {
+  const data = APP._classifications || [];
+  const target = data.find(x => x.id === id);
+  if (!target) return;
+  if (!confirm(`分類「${target.category} / ${target.subcategory}」を削除します。よろしいですか？\n(既存イベントの分類値は変更されません)`)) return;
+  showLoader(true);
+  try {
+    await callApi('api_deleteClassification', id);
+    toast('削除しました', 'success');
+    await loadClassificationsEditor();
+    APP.classifications = await callApi('api_listClassifications');
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function addClassificationRow() {
+  showLoader(true);
+  try {
+    await callApi('api_addClassification', { category: 'その他', subcategory: '新規分類', defaultAllowance: false, active: true });
+    toast('分類を追加しました', 'success');
+    await loadClassificationsEditor();
+    APP.classifications = await callApi('api_listClassifications');
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function moveClassification(id, delta) {
+  const data = (APP._classifications || []).slice();
+  const idx = data.findIndex(x => x.id === id);
+  if (idx < 0) return;
+  const newIdx = idx + delta;
+  if (newIdx < 0 || newIdx >= data.length) return;
+  const tmp = data[idx]; data[idx] = data[newIdx]; data[newIdx] = tmp;
+  APP._classifications = data;
+  renderClassificationRows();
+  showLoader(true);
+  try {
+    await callApi('api_reorderClassifications', data.map(d => d.id));
+    APP.classifications = await callApi('api_listClassifications');
+  } catch (e) {
+    toast('並び替えエラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+// ----- ICS取込ルール編集 -----
+async function loadRulesEditor() {
+  const box = document.getElementById('rulesList');
+  if (!box) return;
+  box.innerHTML = '<div class="text-muted">読み込み中...</div>';
+  try {
+    const data = await callApi('api_listIcsRules');
+    APP._icsRules = data;
+    renderRuleRows();
+  } catch (e) {
+    box.innerHTML = '<div class="toast toast--error">読み込みエラー: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderRuleRows() {
+  const box = document.getElementById('rulesList');
+  if (!box) return;
+  const data = APP._icsRules || [];
+  document.getElementById('rulesCount').textContent = `${data.length}件`;
+  const cats = Array.from(new Set((APP._classifications || APP.classifications || []).map(c => c.category).filter(Boolean)));
+  const allCats = Array.from(new Set(cats.concat(['ブロック', '実践部会', '専門部会', '関連団体', '全体事業', 'その他'])));
+  box.innerHTML = data.map((r, i) => `
+    <div class="sortlist__row" data-rule-id="${r.id}">
+      <div class="sortlist__handle">${i + 1}</div>
+      <input type="text" data-rule-field="pattern" value="${esc(r.pattern)}" placeholder="例: 南千住">
+      <select data-rule-field="matchType">
+        <option value="contains" ${r.matchType === 'contains' ? 'selected' : ''}>含む</option>
+        <option value="regex" ${r.matchType === 'regex' ? 'selected' : ''}>正規表現</option>
+      </select>
+      <div style="display: flex; gap: 4px;">
+        <select data-rule-field="category" style="flex:1;">
+          ${allCats.map(c => `<option value="${esc(c)}" ${c === r.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+        </select>
+        <input type="text" data-rule-field="subcategory" value="${esc(r.subcategory)}" placeholder="サブ分類" style="flex:1.2;">
+      </div>
+      <label class="check-label">
+        <input type="checkbox" data-rule-field="defaultAllowance" ${r.defaultAllowance ? 'checked' : ''}>
+        日当
+      </label>
+      <label class="check-label">
+        <input type="checkbox" data-rule-field="active" ${r.active ? 'checked' : ''}>
+        有効
+      </label>
+      <div class="sortlist__row-actions">
+        <button class="icon-btn" title="上へ" data-rule-up="${r.id}" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="icon-btn" title="下へ" data-rule-down="${r.id}" ${i === data.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="icon-btn" title="保存" data-rule-save="${r.id}">💾</button>
+        <button class="icon-btn icon-btn--danger" title="削除" data-rule-del="${r.id}">🗑</button>
+      </div>
+    </div>
+  `).join('') || '<div class="empty"><div class="empty__icon">📥</div>ルールが登録されていません</div>';
+
+  box.querySelectorAll('[data-rule-up]').forEach(b => b.addEventListener('click', (e) => moveRule(Number(e.currentTarget.dataset.ruleUp), -1)));
+  box.querySelectorAll('[data-rule-down]').forEach(b => b.addEventListener('click', (e) => moveRule(Number(e.currentTarget.dataset.ruleDown), +1)));
+  box.querySelectorAll('[data-rule-save]').forEach(b => b.addEventListener('click', (e) => saveRuleRow(Number(e.currentTarget.dataset.ruleSave))));
+  box.querySelectorAll('[data-rule-del]').forEach(b => b.addEventListener('click', (e) => deleteRuleRow(Number(e.currentTarget.dataset.ruleDel))));
+}
+
+function readRuleRow(id) {
+  const row = document.querySelector(`[data-rule-id="${id}"]`);
+  if (!row) return null;
+  const get = (f) => row.querySelector(`[data-rule-field="${f}"]`);
+  return {
+    id: id,
+    pattern: get('pattern').value,
+    matchType: get('matchType').value,
+    category: get('category').value,
+    subcategory: get('subcategory').value,
+    defaultAllowance: get('defaultAllowance').checked,
+    active: get('active').checked,
+    order: 0
+  };
+}
+
+async function saveRuleRow(id) {
+  const payload = readRuleRow(id);
+  if (!payload) return;
+  if (!payload.pattern) { toast('パターン(キーワード)を入力してください', 'error'); return; }
+  if (!payload.category) { toast('分類を選択してください', 'error'); return; }
+  showLoader(true);
+  try {
+    await callApi('api_updateIcsRule', payload);
+    toast('保存しました', 'success');
+    await loadRulesEditor();
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function deleteRuleRow(id) {
+  const data = APP._icsRules || [];
+  const t = data.find(x => x.id === id);
+  if (!t) return;
+  if (!confirm(`ルール「${t.pattern}」を削除します。よろしいですか？`)) return;
+  showLoader(true);
+  try {
+    await callApi('api_deleteIcsRule', id);
+    toast('削除しました', 'success');
+    await loadRulesEditor();
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function addRuleRow() {
+  showLoader(true);
+  try {
+    await callApi('api_addIcsRule', { pattern: '', matchType: 'contains', category: 'その他', subcategory: 'その他', defaultAllowance: false, active: true });
+    toast('ルールを追加しました', 'success');
+    await loadRulesEditor();
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function moveRule(id, delta) {
+  const data = (APP._icsRules || []).slice();
+  const idx = data.findIndex(x => x.id === id);
+  if (idx < 0) return;
+  const newIdx = idx + delta;
+  if (newIdx < 0 || newIdx >= data.length) return;
+  const tmp = data[idx]; data[idx] = data[newIdx]; data[newIdx] = tmp;
+  APP._icsRules = data;
+  renderRuleRows();
+  showLoader(true);
+  try {
+    await callApi('api_reorderIcsRules', data.map(d => d.id));
+  } catch (e) {
+    toast('並び替えエラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function previewRuleClassification() {
+  const name = (document.getElementById('rulePreviewName').value || '').trim();
+  const out = document.getElementById('rulePreviewResult');
+  if (!name) { out.textContent = 'イベント名を入力'; out.className = 'pill pill--warn'; return; }
+  showLoader(true);
+  try {
+    const r = await callApi('api_previewIcsClassification', name);
+    out.textContent = `${r.category} / ${r.subcategory}` + (r.dailyAllowance ? '  💰日当対象' : '');
+    out.className = 'pill pill--ok';
+  } catch (e) {
+    out.textContent = 'エラー: ' + e.message;
+    out.className = 'pill pill--warn';
+  } finally {
+    showLoader(false);
+  }
 }
 
 // ==========================================================
