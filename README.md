@@ -95,7 +95,7 @@ seishonen_shussekibo/
 
 ## Web アプリとしてデプロイ（clasp）
 
-`src/appsscript.json` に Web アプリ設定（`executeAs: USER_DEPLOYING`, `access: DOMAIN`）を含めているため、デプロイもCLIで完結できます。
+`src/appsscript.json` に Web アプリ設定（`executeAs: USER_ACCESSING`, `access: ANYONE_WITH_GOOGLE_ACCOUNT`）を含めているため、デプロイもCLIで完結できます。Googleアカウントを持つ誰もがアクセス可能で、スプレッドシートの読み書きはアクセスしたユーザ自身の権限で実行されます (= 各利用者にスプレッドシートを共有しておく必要があります)。
 
 1. 最新コードを push
 
