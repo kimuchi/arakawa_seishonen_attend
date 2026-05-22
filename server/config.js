@@ -6,12 +6,13 @@
  *      spreadsheetId      : 連携先スプレッドシートのID
  *      spreadsheetTitle   : 新規作成時のタイトル
  *      icsImportUrl       : ICS取込URL
- *      googleCredentials  : サービスアカウントJSON (オブジェクトとして埋め込む)
- *      googleCredentialsPath : サービスアカウントJSONファイルへの絶対/相対パス
  *      port               : HTTPポート (デフォルト 8080)
- *  - googleCredentials か googleCredentialsPath、または環境変数
- *    GOOGLE_APPLICATION_CREDENTIALS (パス) / GOOGLE_CREDENTIALS_JSON (生JSON)
- *    のいずれかが解決できれば認証可能。
+ *  - 認証は Google Application Default Credentials (ADC) を使用するため、
+ *    JSON キーは config に保存しない。
+ *    検出順 (googleapis 内部):
+ *      1) GOOGLE_APPLICATION_CREDENTIALS が指すファイル
+ *      2) gcloud auth application-default login の結果
+ *      3) GCP メタデータサーバ (Cloud Run / GCE / GKE / Cloud Functions)
  */
 'use strict';
 
@@ -57,44 +58,8 @@ function updateConfig(patch) {
   return saveConfig(next);
 }
 
-function getGoogleCredentials(cfg) {
-  // 優先順位: configのインライン > configのパス指定 > 環境変数の生JSON > 環境変数のパス
-  if (cfg && cfg.googleCredentials && typeof cfg.googleCredentials === 'object') {
-    return cfg.googleCredentials;
-  }
-  if (cfg && cfg.googleCredentialsPath) {
-    const p = path.isAbsolute(cfg.googleCredentialsPath)
-      ? cfg.googleCredentialsPath
-      : path.join(process.cwd(), cfg.googleCredentialsPath);
-    if (fs.existsSync(p)) {
-      return JSON.parse(fs.readFileSync(p, 'utf8'));
-    }
-    throw new Error('指定されたサービスアカウントJSONが見つかりません: ' + p);
-  }
-  if (process.env.GOOGLE_CREDENTIALS_JSON) {
-    return JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
-  }
-  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    const p = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-    if (fs.existsSync(p)) {
-      return JSON.parse(fs.readFileSync(p, 'utf8'));
-    }
-  }
-  return null;
-}
-
 function isConfigured(cfg) {
-  if (!cfg) return false;
-  const hasCreds = !!getGoogleCredentialsSafe(cfg);
-  return hasCreds && !!cfg.spreadsheetId;
-}
-
-function getGoogleCredentialsSafe(cfg) {
-  try {
-    return getGoogleCredentials(cfg);
-  } catch (e) {
-    return null;
-  }
+  return !!(cfg && cfg.spreadsheetId);
 }
 
 function getPort(cfg) {
@@ -106,8 +71,6 @@ module.exports = {
   loadConfig,
   saveConfig,
   updateConfig,
-  getGoogleCredentials,
-  getGoogleCredentialsSafe,
   isConfigured,
   getPort,
 };

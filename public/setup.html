@@ -25,25 +25,19 @@
       <div class="card">
         <div class="setup-step">
           <span class="setup-step__num">1</span>
-          <h3 class="setup-step__title">Google サービスアカウントの認証情報</h3>
+          <h3 class="setup-step__title">認証 (Application Default Credentials)</h3>
         </div>
         <div class="setup-help">
-          Google Cloud で作成したサービスアカウント JSON キーをそのまま貼り付けてください。<br>
-          まだ未作成の場合は、デプロイガイドの「サービスアカウントの作成」を参照してください。<br>
-          ※ 既に貼り付け済みの場合は、再入力しなければ既存の設定が維持されます。
+          このアプリは <strong>JSON キーを使わず</strong>、Application Default Credentials (ADC) を利用します。<br>
+          <ul>
+            <li><strong>Cloud Run / GCE / GKE</strong>: ランタイムサービスアカウントを Cloud Run に紐付けるだけ。アプリ側では自動検出されます。</li>
+            <li><strong>ローカル開発</strong>: <code>gcloud auth application-default login</code> を 1 回実行。</li>
+            <li><strong>その他</strong>: Workload Identity Federation など。詳しくはデプロイガイド参照。</li>
+          </ul>
+          下に表示されている「使用中のアカウント」が、スプレッドシートにアクセスするアカウントです。<br>
+          このメールアドレスを、対象スプレッドシートに <strong>「編集者」</strong> として共有しておいてください。
         </div>
-        <div class="form-row">
-          <div class="form-field" style="flex: 1 1 100%;">
-            <label class="form-field__label">サービスアカウント JSON</label>
-            <textarea id="credsJson" class="form-field__textarea" style="min-height: 160px; font-family: 'SF Mono', Consolas, monospace; font-size: 12px;" placeholder='{"type":"service_account","project_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\n..."...}'></textarea>
-          </div>
-        </div>
-        <div class="form-row">
-          <div class="form-field" style="flex: 1 1 100%;">
-            <label class="form-field__label">あるいは サービスアカウント JSON のファイルパス (サーバ側のローカルパス)</label>
-            <input type="text" id="credsPath" class="form-field__input" placeholder="例: /etc/secrets/service-account.json (Cloud Run の Secret Mount など)">
-          </div>
-        </div>
+        <div id="accountBox" class="text-muted">確認中...</div>
       </div>
 
       <div class="card">
@@ -53,8 +47,8 @@
         </div>
         <div class="setup-help">
           既存のスプレッドシートを使う場合は ID を入力してください (URL の <code>/d/【ここ】/edit</code> 部分)。<br>
-          新規に作成する場合は「新規スプレッドシートを作成」ボタンを押すと、サービスアカウントのドライブ上に作成されます。<br>
-          ※ 既存スプレッドシートを使う場合は、サービスアカウントのメールアドレスに「編集者」権限を付与してください。
+          新規に作成する場合は「新規スプレッドシートを作成」ボタンを押すと、上記アカウントのドライブに作成されます。<br>
+          新規作成時は「共有先メールアドレス」に普段使う Google アカウントを入れておくと、作成と同時に編集権限が付与されます。
         </div>
         <div class="form-row">
           <div class="form-field" style="flex: 1 1 100%;">
@@ -68,7 +62,7 @@
             <input type="text" id="spreadsheetTitle" class="form-field__input" value="2026年度荒川区青少年委員連絡会出席簿">
           </div>
           <div class="form-field" style="flex: 1 1 100%;">
-            <label class="form-field__label">(新規作成する場合) 共有先メールアドレス (任意・複数の場合はカンマ区切り)</label>
+            <label class="form-field__label">(新規作成する場合) 共有先メールアドレス (任意)</label>
             <input type="text" id="shareWith" class="form-field__input" placeholder="例: kimura@example.com">
           </div>
         </div>

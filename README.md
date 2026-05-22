@@ -17,6 +17,7 @@ Google Apps Script から Node.js (Express + Google Sheets API) に置き換え�
 - **集計**: 上半期 / 下半期 / 通年 / 任意期間で、メンバ別・ブロック別に日当 (500円 × 日数) を計算。CSV 出力可
 - **設定**: 年度開始日・終了日・上半期末・日当単価を画面から変更可能
 - **設定ファイル**: `config.json` 1 つに集約。初回起動時の `/setup` 画面で GUI 設定 → ファイル書き込み
+- **認証は鍵レス (ADC)**: サービスアカウント JSON キーを作らず、Cloud Run のランタイム SA や `gcloud auth application-default login` の認証を自動採用
 
 ## クイックスタート
 
@@ -24,11 +25,15 @@ Google Apps Script から Node.js (Express + Google Sheets API) に置き換え�
 # 1. 依存をインストール
 npm install
 
-# 2. サーバ起動
+# 2. ADC 認証 (鍵レス、ローカル開発用)
+gcloud auth application-default login
+gcloud auth application-default set-quota-project YOUR_PROJECT_ID
+
+# 3. サーバ起動
 npm start
 # → http://localhost:8080 → 自動で /setup へ
 
-# 3. /setup でサービスアカウント JSON とスプレッドシート ID を登録
+# 4. /setup でスプレッドシート ID を登録 (認証は ADC 自動採用)
 #    → 自動でシート初期化 → アプリ利用開始
 ```
 

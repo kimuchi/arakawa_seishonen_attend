@@ -81,16 +81,20 @@ app.get('/setup', (req, res) => {
 });
 
 // ---------- セットアップAPI ----------
-app.get('/api/setup/status', (req, res) => {
+app.get('/api/setup/status', async (req, res) => {
   const cfg = config.loadConfig() || {};
-  const hasCreds = !!config.getGoogleCredentialsSafe(cfg);
+  let activeAccount = '';
+  try { activeAccount = await sc.getActiveAccountEmail(); } catch (e) { /* ignore */ }
   res.json({
     ok: true,
     data: {
       configured: config.isConfigured(cfg),
-      hasCredentials: hasCreds,
+      activeAccount,
+      hasActiveAccount: !!activeAccount,
       hasSpreadsheetId: !!cfg.spreadsheetId,
       hasIcsUrl: !!cfg.icsImportUrl,
+      spreadsheetId: cfg.spreadsheetId || '',
+      icsImportUrl: cfg.icsImportUrl || '',
       configPath: config.getConfigPath(),
       port: config.getPort(cfg),
     },
@@ -99,27 +103,23 @@ app.get('/api/setup/status', (req, res) => {
 
 app.post('/api/setup/test-connection', async (req, res) => {
   try {
-    const { credentials, spreadsheetId } = req.body || {};
-    if (!credentials) throw new Error('credentials を指定してください。');
+    const { spreadsheetId } = req.body || {};
     if (!spreadsheetId) throw new Error('スプレッドシートIDを指定してください。');
-    // 一時的に config を組み立てて疎通確認
-    const tmpCfg = { googleCredentials: credentials, spreadsheetId };
-    // 認証して、対象スプレッドシートのメタ情報を取得してみる
     const { google } = require('googleapis');
-    const auth = new google.auth.JWT({
-      email: credentials.client_email,
-      key: credentials.private_key,
+    const auth = new google.auth.GoogleAuth({
       scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive.file'],
     });
     const api = google.sheets({ version: 'v4', auth });
     const meta = await api.spreadsheets.get({ spreadsheetId, includeGridData: false });
+    let activeAccount = '';
+    try { activeAccount = await sc.getActiveAccountEmail(); } catch (e) { /* ignore */ }
     res.json({
       ok: true,
       data: {
         spreadsheetId: meta.data.spreadsheetId,
         title: meta.data.properties && meta.data.properties.title,
         sheetCount: (meta.data.sheets || []).length,
-        clientEmail: credentials.client_email,
+        activeAccount,
       },
     });
   } catch (e) {
@@ -129,12 +129,9 @@ app.post('/api/setup/test-connection', async (req, res) => {
 
 app.post('/api/setup/create-spreadsheet', async (req, res) => {
   try {
-    const { credentials, title, shareWithEmail } = req.body || {};
-    if (!credentials) throw new Error('credentials を指定してください。');
+    const { title, shareWithEmail } = req.body || {};
     const { google } = require('googleapis');
-    const auth = new google.auth.JWT({
-      email: credentials.client_email,
-      key: credentials.private_key,
+    const auth = new google.auth.GoogleAuth({
       scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive.file'],
     });
     const sheets = google.sheets({ version: 'v4', auth });
@@ -157,7 +154,6 @@ app.post('/api/setup/create-spreadsheet', async (req, res) => {
           requestBody: { role: 'writer', type: 'user', emailAddress: shareWithEmail },
         });
       } catch (e) {
-        // 共有失敗は致命的ではない
         console.warn('[setup] share failed:', e.message);
       }
     }
@@ -176,22 +172,13 @@ app.post('/api/setup/create-spreadsheet', async (req, res) => {
 
 app.post('/api/setup', async (req, res) => {
   try {
-    const { credentials, credentialsPath, spreadsheetId, icsImportUrl, port } = req.body || {};
+    const { spreadsheetId, icsImportUrl, port } = req.body || {};
     const next = config.loadConfig() || {};
-    if (credentials && typeof credentials === 'object') {
-      next.googleCredentials = credentials;
-      // 排他: パス指定が残っていれば削除
-      delete next.googleCredentialsPath;
-    } else if (credentialsPath) {
-      next.googleCredentialsPath = credentialsPath;
-      delete next.googleCredentials;
-    }
     if (spreadsheetId) next.spreadsheetId = spreadsheetId;
     if (icsImportUrl !== undefined) next.icsImportUrl = icsImportUrl;
     if (port) next.port = Number(port) || 8080;
     config.saveConfig(next);
     sc.resetClients();
-    // 初期化を試行 (失敗しても設定は保存済)
     let initInfo = null;
     try {
       initInfo = await initializer.initializeSpreadsheet();
@@ -204,7 +191,7 @@ app.post('/api/setup', async (req, res) => {
   }
 });
 
-// 設定単体の更新 (設定タブ内の「設定ファイル管理」用)
+// 設定単体の更新 (設定タブ内の「接続設定」用)
 app.post('/api/setup/update', async (req, res) => {
   try {
     const patch = req.body || {};
@@ -214,10 +201,6 @@ app.post('/api/setup/update', async (req, res) => {
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'spreadsheetId')) {
       next.spreadsheetId = patch.spreadsheetId;
-    }
-    if (patch.credentials && typeof patch.credentials === 'object') {
-      next.googleCredentials = patch.credentials;
-      delete next.googleCredentialsPath;
     }
     config.saveConfig(next);
     sc.resetClients();

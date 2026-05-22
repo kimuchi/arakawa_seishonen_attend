@@ -1,12 +1,15 @@
 /**
  * sheets-client.js
  * Google Sheets API および Drive API のラッパ。
- *  - 全シートをまるごとキャッシュ(短時間)し、頻繁な読み込みのコストを抑える。
+ *  - 認証は Application Default Credentials (ADC) を使用。
+ *    Cloud Run のランタイム SA / GOOGLE_APPLICATION_CREDENTIALS /
+ *    gcloud auth application-default login のいずれでも自動検出される。
  *  - ヘッダ行付きシートの「オブジェクトの配列」化や、IDによる行検索など、
  *    GAS版のヘルパ(99_Utils.gs)に近い API を提供する。
  */
 'use strict';
 
+const fs = require('fs');
 const { google } = require('googleapis');
 const config = require('./config');
 
@@ -15,27 +18,13 @@ const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
 ];
 
+let _authCache = null;
 let _sheetsCache = null;
 let _driveCache = null;
-let _authCache = null;
-let _credKey = null;
 
 function getAuth() {
-  const cfg = config.loadConfig();
-  const creds = config.getGoogleCredentials(cfg);
-  if (!creds) {
-    throw new Error('Google認証情報が未設定です。設定画面で登録してください。');
-  }
-  const key = (creds.private_key || '') + '|' + (creds.client_email || '');
-  if (_authCache && _credKey === key) return _authCache;
-  _authCache = new google.auth.JWT({
-    email: creds.client_email,
-    key: creds.private_key,
-    scopes: SCOPES,
-  });
-  _credKey = key;
-  _sheetsCache = null;
-  _driveCache = null;
+  if (_authCache) return _authCache;
+  _authCache = new google.auth.GoogleAuth({ scopes: SCOPES });
   return _authCache;
 }
 
@@ -53,7 +42,6 @@ function getDriveApi() {
 
 function resetClients() {
   _authCache = null;
-  _credKey = null;
   _sheetsCache = null;
   _driveCache = null;
 }
@@ -68,6 +56,45 @@ function getSpreadsheetId() {
 
 function getSpreadsheetUrl() {
   return `https://docs.google.com/spreadsheets/d/${getSpreadsheetId()}/edit`;
+}
+
+/**
+ * 現在の ADC で動いているサービスアカウントのメールアドレスを取得する。
+ * 順に: メタデータサーバ (Cloud Run/GCE) → 認証クライアント → GOOGLE_APPLICATION_CREDENTIALS の JSON
+ * 取得できなければ空文字。
+ */
+async function getActiveAccountEmail() {
+  // 1) GCP メタデータサーバ
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 1500);
+    const res = await fetch(
+      'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email',
+      { headers: { 'Metadata-Flavor': 'Google' }, signal: ctl.signal }
+    );
+    clearTimeout(t);
+    if (res.ok) {
+      const text = (await res.text()).trim();
+      if (text) return text;
+    }
+  } catch (e) { /* not on GCP, fall through */ }
+
+  // 2) 認証クライアント (JWT 系 / Impersonated 系)
+  try {
+    const client = await getAuth().getClient();
+    if (client && client.email) return String(client.email);
+  } catch (e) { /* ignore */ }
+
+  // 3) GOOGLE_APPLICATION_CREDENTIALS が指す JSON ファイル
+  try {
+    const p = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    if (p && fs.existsSync(p)) {
+      const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+      if (data.client_email) return data.client_email;
+    }
+  } catch (e) { /* ignore */ }
+
+  return '';
 }
 
 // ---------- 低レベル ----------
@@ -277,6 +304,7 @@ module.exports = {
   getSheetsApi,
   getDriveApi,
   resetClients,
+  getActiveAccountEmail,
   getSpreadsheetId,
   getSpreadsheetUrl,
   getSpreadsheetMeta,
