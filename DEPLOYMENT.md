@@ -1,354 +1,256 @@
-# デプロイガイド
+# デプロイガイド (Google Cloud Run / 無料枠)
 
-荒川区青少年委員連絡会 出席簿 (Node.js / Cloud Run 版) のセットアップ・デプロイ手順をまとめます。
+荒川区青少年委員連絡会 出席簿 (Node.js 版) を **Google Cloud Run の無料枠** にデプロイする手順です。
 
-- **データ保存先**: Google スプレッドシート (これは GAS 版から変更なし)
-- **アプリ実行環境**: Node.js 18+ (任意のサーバ・コンテナ環境で動作)
-- **設定**: 単一の `config.json` ファイル + 初回起動時のセットアップ画面 (`/setup`)
-- **認証**: **Application Default Credentials (ADC) のみ** ── サービスアカウントの JSON キーは作成しません
-- **ログイン機構**: なし (アプリにアクセスできる利用者は全員フル機能を使えます)
+- ローカルでの動作確認は省略し、最初から Cloud Run にデプロイします。
+- 認証は **Application Default Credentials (ADC) のみ** ── サービスアカウントの JSON キーは作りません。
+- 設定 (スプレッドシート ID、ICS取込URL) は **GCS バケットに永続化された `config.json`** に保存します。
+- データ本体 (出席記録など) は Google スプレッドシートに保存されます (GAS 版から変更なし)。
 
 ---
 
 ## 構成図
 
 ```
-[ブラウザ] ── HTTP ──▶ [Node.js (Express)] ── Google API ──▶ [Google Sheets]
-                              │  ▲
-                              │  └─ ADC (Cloud Run の SA / gcloud ADC / WIF)
-                              │
-                              └─ config.json (スプレッドシートID・ICS取込URL等)
+[ブラウザ] ──HTTPS──▶ [Cloud Run (Node.js)] ──Sheets API──▶ [Google スプレッドシート]
+                          │      ▲
+                          │      └─ ADC (ランタイム SA、鍵なし)
+                          │
+                          └─ Volume Mount ──▶ [GCS バケット: config.json]
 ```
-
-`config.json` に **秘密鍵は保存しません**。 認証は実行環境の Application Default Credentials を使い、Cloud Run ならランタイム SA、ローカルなら `gcloud auth application-default login` の認証情報が自動採用されます。
 
 ---
 
-## 0. 前提
+## 0. 無料枠について
 
-| 項目 | 要件 |
+Cloud Run には毎月の **無料枠** があります (1課金アカウントあたり):
+
+| リソース | 無料枠 (月) |
 |---|---|
-| Node.js | 18 以上 (Cloud Run の Dockerfile では Node 22) |
-| Google Cloud アカウント | 1つ。プロジェクトを作成できる権限 |
-| Google スプレッドシート | アプリが使う SA のメールアドレスに編集権限を付与できるもの (なければ起動後に作成可能) |
+| リクエスト数 | 200万件 |
+| vCPU 秒 | 18万 |
+| メモリ GiB 秒 | 36万 |
+| ネットワーク下り (北米) | 1 GB |
+
+このアプリは数人〜数十人の利用想定で、無料枠に十分収まる規模です。**無料枠を超えないために、本ガイドでは以下を徹底します**:
+
+- `--min-instances=0` (アイドル時は完全停止)
+- `--max-instances=1` (1 インスタンスで十分)
+- `--cpu-throttling` (デフォルト・リクエスト中のみ課金対象)
+- `--memory=512Mi` (最小)
+- リージョンは `asia-northeast1` (東京) を推奨
+
+GCS については asia-northeast1 の Standard Storage が $0.023/GB-月で、設定ファイル (数 KB) なら実質 0 円です。
 
 ---
 
-## 1. Google Cloud 側の準備 (鍵レス)
+## 1. 事前準備
 
-### 1.1 プロジェクトの作成
-
-1. [Google Cloud Console](https://console.cloud.google.com/) にアクセス
-2. 上部のプロジェクト選択 → 「新しいプロジェクト」を作成 (既存プロジェクトでも可)
-
-### 1.2 API の有効化
-
-[API ライブラリ](https://console.cloud.google.com/apis/library) で次の 2 つを有効化:
-
-- **Google Sheets API**
-- **Google Drive API**  (※ 新規スプレッドシート作成 / 共有設定で使用)
-
-### 1.3 サービスアカウントの作成 (キーは作らない)
-
-1. [サービスアカウント](https://console.cloud.google.com/iam-admin/serviceaccounts) → 「サービスアカウントを作成」
-2. 名前: `shussekibo-runner` (任意)
-3. プロジェクト権限の付与は不要 (このアプリはユーザーが共有したスプレッドシート以外にはアクセスしません)
-4. **「キー」タブで JSON キーを作成しない** ── キー漏洩・ローテーション運用の手間を排除するのが今回の方針です。
-5. 作成後に表示されるメールアドレス (例: `shussekibo-runner@your-project.iam.gserviceaccount.com`) を控えておきます。これがアプリが使うアカウントです。
-
-### 1.4 (既存スプレッドシートを使う場合) 共有設定
-
-サービスアカウントのメールアドレスを、対象スプレッドシートの「共有」から **編集者** として追加してください (通知メールはオフで OK)。
-
-### 1.5 (新規にスプレッドシートを作る場合)
-
-そのままで OK です。後述のセットアップ画面に「新規スプレッドシートを作成」ボタンがあります。SA のドライブ上に作成されるので、セットアップ画面で共有先メールアドレスを指定し、自分の Google アカウントを編集者に入れておくのがおすすめです。
-
----
-
-## 2. ローカルでの動作確認
-
-開発・運用前の動作確認に。
+### 1.1 GCP プロジェクトと CLI
 
 ```bash
-# 1. リポジトリを取得
-git clone <このリポジトリ>
-cd arakawa_seishonen_attend
+# gcloud CLI を入れる (macOS Homebrew の例)
+brew install --cask google-cloud-sdk
+gcloud auth login
 
-# 2. 依存インストール
-npm install
-
-# 3. ADC の準備 (鍵レス)
-gcloud auth application-default login
-gcloud auth application-default set-quota-project <あなたの GCP プロジェクトID>
-
-# 4. 起動
-npm start
-# → http://localhost:8080 にアクセス → 自動的に /setup へリダイレクト
-```
-
-> `gcloud auth application-default login` を 1 回実行すると、`~/.config/gcloud/application_default_credentials.json` に短命の OAuth リフレッシュトークンが保存されます。アプリはこれを ADC として自動採用します。
->
-> **注意**: この方法だと "アプリがアクセスする Google アカウント" は **あなたのユーザ アカウント** になります。試運用には十分ですが、本番ではユーザー個人ではなくサービスアカウントで動かしたいので、次節の Cloud Run などにデプロイしてください。
-
-ブラウザで `/setup` を開き、以下を入力 → 「設定を保存して初期化」:
-
-1. **使用中のアカウント** が表示されているか確認 (ADC が効いているかの目安)
-2. スプレッドシート ID (URL の `/d/【ここ】/edit` 部分) または「新規スプレッドシートを作成」
-3. ICS取込URL (任意)
-
-設定が `./data/config.json` に保存され、自動でスプレッドシート上に必要シート(メンバ・イベント・出席・設定・分類マスタ・ICS取込ルール) が作成されます。
-
-> 設定後は `/` がアプリ画面になります。設定をやり直すときはヘッダの「🔧 設定」リンク、または `/setup` を直接開いてください。
-
----
-
-## 3. デプロイ方法
-
-プラットフォーム非依存。代表的な4パターンを記載します。
-
-### A. Google Cloud Run (推奨: マネージドで鍵レス運用)
-
-Cloud Run はランタイム SA を紐付けるだけで ADC が自動で効くので、JSON キーは不要です。`config.json` は Cloud Run の **Volume Mount** で GCS バケットに永続化します。
-
-#### A-1. 事前準備
-
-```bash
+# プロジェクトを作成 (既存プロジェクトでも可)
+gcloud projects create YOUR_PROJECT_ID --name="Arakawa Shussekibo"
 gcloud config set project YOUR_PROJECT_ID
 
-# (a) アプリ用のサービスアカウント (鍵は作らない)
+# 課金アカウントをリンク (無料枠を使うにも課金アカウント設定は必須)
+# Console: https://console.cloud.google.com/billing からリンク
+```
+
+### 1.2 必要な API を有効化
+
+```bash
+gcloud services enable \
+  run.googleapis.com \
+  cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com \
+  sheets.googleapis.com \
+  drive.googleapis.com \
+  iamcredentials.googleapis.com \
+  storage.googleapis.com
+```
+
+### 1.3 Artifact Registry リポジトリ
+
+```bash
+gcloud artifacts repositories create apps \
+  --repository-format=docker \
+  --location=asia-northeast1
+```
+
+### 1.4 ランタイム サービスアカウント (鍵は作らない)
+
+```bash
 gcloud iam service-accounts create shussekibo-runner \
   --display-name "Arakawa Shussekibo Runner"
+```
 
-# (b) 設定永続化用の GCS バケット
+メールアドレス: `shussekibo-runner@YOUR_PROJECT_ID.iam.gserviceaccount.com`
+これがアプリが Sheets/Drive にアクセスするアカウントです。**JSON キーは作成しません**。
+
+### 1.5 設定永続化用 GCS バケット
+
+```bash
+# バケット名はグローバルでユニーク。プロジェクトIDを含めるのが簡単
 gsutil mb -l asia-northeast1 gs://YOUR_PROJECT_ID-shussekibo-config
 
-# (c) ランタイム SA に GCS バケットへの読み書き権限
+# ランタイム SA に読み書き権限
 gsutil iam ch \
   serviceAccount:shussekibo-runner@YOUR_PROJECT_ID.iam.gserviceaccount.com:objectAdmin \
   gs://YOUR_PROJECT_ID-shussekibo-config
-
-# (d) 対象スプレッドシートに上記 SA を「編集者」で共有しておく
-#     (新規作成する場合はこのステップ不要。/setup の「新規作成」ボタンを使う)
 ```
 
-#### A-2. デプロイ
+### 1.6 (既存スプレッドシートを使う場合) 共有
+
+対象スプレッドシートを開き、右上の「共有」から
+`shussekibo-runner@YOUR_PROJECT_ID.iam.gserviceaccount.com` を **編集者** として追加してください (通知メールはオフで OK)。
+
+新規にスプレッドシートを作る場合はこのステップ不要。デプロイ後の `/setup` 画面に「新規スプレッドシートを作成」ボタンがあります。
+
+---
+
+## 2. ビルドとデプロイ
+
+リポジトリのルートで以下を実行します。
 
 ```bash
-# (1) コンテナイメージをビルド (Artifact Registry を使う想定)
-gcloud builds submit --tag asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/apps/arakawa-shussekibo:latest
+# (1) コンテナイメージをビルド & Artifact Registry に Push
+gcloud builds submit \
+  --tag asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/apps/arakawa-shussekibo:latest
 
-# (2) デプロイ
-#     --service-account でランタイム SA を指定 → アプリ側で ADC が自動的に有効
-#     --add-volume / --add-volume-mount で config.json を GCS に永続化
+# (2) Cloud Run にデプロイ (無料枠向け設定)
 gcloud run deploy arakawa-shussekibo \
   --image asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/apps/arakawa-shussekibo:latest \
   --region asia-northeast1 \
   --platform managed \
   --allow-unauthenticated \
   --port 8080 \
+  --memory 512Mi \
+  --cpu 1 \
   --concurrency 1 \
   --min-instances 0 \
   --max-instances 1 \
-  --memory 512Mi \
+  --timeout 300 \
   --service-account shussekibo-runner@YOUR_PROJECT_ID.iam.gserviceaccount.com \
   --set-env-vars TZ=Asia/Tokyo \
   --add-volume name=cfg,type=cloud-storage,bucket=YOUR_PROJECT_ID-shussekibo-config \
   --add-volume-mount volume=cfg,mount-path=/app/data
 ```
 
-`--concurrency 1`、`--max-instances 1` にしているのは、`config.json` ファイルへの同時書き込みや排他制御を単純化するためです。本アプリは数百件/日 規模を想定しており単一インスタンスで十分です。
+各オプションの意味:
 
-#### A-3. 初回セットアップ
+| オプション | 効果 |
+|---|---|
+| `--allow-unauthenticated` | URL を知っていれば誰でもアクセス可。組織アカウントでガードしたい場合は `--no-allow-unauthenticated` に |
+| `--memory 512Mi` `--cpu 1` | 無料枠に収まる最小構成 |
+| `--concurrency 1` | 同時 1 リクエストずつ処理 (出席簿用途では充分) |
+| `--min-instances 0` | **重要**。アイドル時はインスタンス 0 で無料 |
+| `--max-instances 1` | スケールアウトしない (`config.json` の整合性を守るためにも 1 固定) |
+| `--service-account` | ADC で使われるランタイム SA |
+| `--set-env-vars TZ=Asia/Tokyo` | ICS取込時の時刻ズレ防止 |
+| `--add-volume` / `--add-volume-mount` | `config.json` を GCS バケットに永続化 |
 
-Cloud Run が払い出した URL の末尾に `/setup` をつけてアクセスし、画面に表示される「使用中のアカウント」(= 上で指定した `shussekibo-runner@...`) が対象スプレッドシートに編集者で共有されていることを確認 → スプレッドシート ID を入れて「設定を保存して初期化」。
-
-`config.json` は GCS バケット上に永続化されるので、コンテナが再起動しても消えません。
-
-### B. オンプレ Linux サーバ / VPS (systemd)
-
-ADC は **環境変数 `GOOGLE_APPLICATION_CREDENTIALS` が指す SA キー JSON** で動かすこともできますが、今回はキーレス方針なので、推奨は次のいずれか:
-
-- **Workload Identity Federation (WIF)** で OIDC 認証 (オンプレ → GCP)
-- **gcloud user credentials** をサーバ上でセットアップ (`gcloud auth application-default login`)
-
-WIF が使える環境ならそれが最も安全です。簡易には gcloud user 認証で運用できます。
-
-```bash
-# Node.js 22 を入れる (例: NodeSource)
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs
-
-# gcloud をインストールして実行ユーザで ADC ログイン
-sudo apt-get install -y google-cloud-cli
-sudo -u www-data gcloud auth application-default login
-sudo -u www-data gcloud auth application-default set-quota-project YOUR_PROJECT_ID
-
-# アプリ配置
-sudo mkdir -p /opt/arakawa-shussekibo
-sudo chown $USER /opt/arakawa-shussekibo
-cd /opt/arakawa-shussekibo
-git clone <このリポジトリ> .
-npm ci --omit=dev
-
-# systemd ユニット
-sudo tee /etc/systemd/system/arakawa-shussekibo.service > /dev/null <<EOF
-[Unit]
-Description=Arakawa Seishonen Shussekibo
-After=network.target
-
-[Service]
-Type=simple
-User=www-data
-WorkingDirectory=/opt/arakawa-shussekibo
-Environment=PORT=8080
-Environment=TZ=Asia/Tokyo
-Environment=CONFIG_PATH=/opt/arakawa-shussekibo/data/config.json
-# WIF を使う場合は GOOGLE_APPLICATION_CREDENTIALS=/path/to/wif-config.json
-ExecStart=/usr/bin/node server/index.js
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo mkdir -p /opt/arakawa-shussekibo/data
-sudo chown -R www-data:www-data /opt/arakawa-shussekibo/data
-sudo systemctl daemon-reload
-sudo systemctl enable --now arakawa-shussekibo
-```
-
-`https://(サーバホスト):8080/setup` を開いてセットアップ → 完了。
-
-リバースプロキシ(Nginx/Caddy)を前段に置くと、HTTPS化や 80/443 への変換が簡単です。
-
-### C. Docker (任意のコンテナ環境)
-
-ADC はコンテナ内では自動で検出できないため、明示的に渡します。
-
-#### C-1. ローカルで動かす (個人開発)
-
-```bash
-docker build -t arakawa-shussekibo:latest .
-
-# ホスト側 gcloud ADC をマウントして使う
-docker run -d --name arakawa-shussekibo \
-  -p 8080:8080 \
-  -v $(pwd)/data:/app/data \
-  -v $HOME/.config/gcloud:/home/node/.config/gcloud:ro \
-  -e GOOGLE_APPLICATION_CREDENTIALS=/home/node/.config/gcloud/application_default_credentials.json \
-  arakawa-shussekibo:latest
-```
-
-#### C-2. 任意のクラウド/VPS のコンテナ環境
-
-GCP 外なら **Workload Identity Federation の構成ファイル** をマウントするのが鍵レスで推奨。
-
-```bash
-docker run -d --name arakawa-shussekibo \
-  -p 8080:8080 \
-  -v $(pwd)/data:/app/data \
-  -v $(pwd)/wif/clientLibraryConfig.json:/app/wif.json:ro \
-  -e GOOGLE_APPLICATION_CREDENTIALS=/app/wif.json \
-  arakawa-shussekibo:latest
-```
-
-> WIF が組めない環境では、最終手段として「制限を絞った SA キー」を使うこともできますが、ローテーション運用が必要です。可能ならクラウドが提供するマネージド ID (Cloud Run / EKS の IRSA / Azure Workload Identity 等) を使ってください。
-
-### D. Google Compute Engine / GKE
-
-Cloud Run と同じく、インスタンス/Pod の SA を紐付けるだけで ADC が効きます。
-GKE では Workload Identity を有効化して KSA に GSA をバインド → デプロイ。手順は GCP 公式を参照。
+デプロイが完了すると `https://arakawa-shussekibo-XXXXXXXX-an.a.run.app` のような URL が表示されます。
 
 ---
 
-## 4. 設定ファイル仕様 (`config.json`)
+## 3. 初回セットアップ (ブラウザから)
 
-```json
-{
-  "spreadsheetId": "1AbCdEfG...",
-  "icsImportUrl": "https://calendar.google.com/calendar/ical/.../basic.ics",
-  "port": 8080
-}
-```
+1. 表示された Cloud Run の URL を開く → 自動的に `/setup` にリダイレクト
+2. 画面の「使用中のアカウント」欄に `shussekibo-runner@YOUR_PROJECT_ID.iam.gserviceaccount.com` が表示されていることを確認
+3. 既存スプレッドシートを使う場合: そのスプレッドシート ID を入力
+   - 新規作成する場合: 「共有先メールアドレス」に自分の Google アカウントを入れて「新規スプレッドシートを作成」を押す → ID が自動入力される
+4. (任意) ICS取込URL を入力
+5. 「💾 設定を保存して初期化」を押す → `config.json` が GCS バケットに書き込まれ、スプレッドシートの初期化 (シート作成 + 初期メンバ投入) が走ります
+6. 3 秒後に `/` にリダイレクト → アプリ画面に遷移
 
-| キー | 必須 | 説明 |
-|---|---|---|
-| `spreadsheetId` | ✔︎ | データを書き込むスプレッドシートの ID |
-| `icsImportUrl` | | ICS取込時の URL |
-| `port` | | リッスンポート (デフォルト 8080。環境変数 `PORT` が優先) |
+これで完了。利用者には Cloud Run の URL を共有してください。
 
-**認証情報は config に書きません。** ADC の検出順は以下のとおりです (googleapis 内部で自動処理):
+---
 
-1. `GOOGLE_APPLICATION_CREDENTIALS` 環境変数が指すファイル (WIF 構成 / 旧 SA キー JSON)
-2. `gcloud auth application-default login` の結果 (`~/.config/gcloud/application_default_credentials.json`)
-3. GCP メタデータサーバ (Cloud Run / GCE / GKE / Cloud Functions のランタイム SA)
+## 4. 設定の更新
 
-**その他の環境変数**
+設定タブの「キー / 値」(年度・日当単価など) は画面から直接保存できます。
 
-| 環境変数 | 用途 |
-|---|---|
-| `CONFIG_PATH` | `config.json` の置き場所 (デフォルト `./data/config.json`) |
-| `PORT` | リッスンポート |
-| `TZ` | タイムゾーン。**ICS取込で時刻ズレが起きないよう `Asia/Tokyo` 推奨** |
+スプレッドシート ID / ICS取込URL を変更したい場合は、ヘッダの「🔧 設定」または `/setup` を直接開いて、再度入力 → 「保存」してください。
 
 ---
 
 ## 5. アップデート手順
 
-### Cloud Run
+新しいバージョンを反映するには再ビルド & 再デプロイのみ:
 
 ```bash
-gcloud builds submit --tag asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/apps/arakawa-shussekibo:latest
-gcloud run deploy arakawa-shussekibo --image asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/apps/arakawa-shussekibo:latest --region asia-northeast1
+gcloud builds submit \
+  --tag asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/apps/arakawa-shussekibo:latest
+
+gcloud run deploy arakawa-shussekibo \
+  --image asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/apps/arakawa-shussekibo:latest \
+  --region asia-northeast1
 ```
 
-### VPS
-
-```bash
-git pull
-npm ci --omit=dev
-sudo systemctl restart arakawa-shussekibo
-```
-
-### Docker
-
-```bash
-git pull
-docker build -t arakawa-shussekibo:latest .
-docker stop arakawa-shussekibo && docker rm arakawa-shussekibo
-docker run ... arakawa-shussekibo:latest
-```
-
-アプリ側のロジックや UI を更新する場合、データ (スプレッドシート) はそのまま使えます。
+`config.json` は GCS バケット側にあるので、Cloud Run を更新してもデータ・設定は保持されます。スプレッドシート本体も影響を受けません。
 
 ---
 
-## 6. バックアップ・復旧
+## 6. 無料枠を超えないためのコツ
 
-- **データ本体**: スプレッドシートは Google Drive の世代管理 (「ファイル」→「バージョン履歴」) で復旧可能。さらに重要なら、定期エクスポート (CSV / XLSX) する仕組みを追加してください。
-- **設定**: `data/config.json` を別の安全な場所(USBメモリ / 別のクラウドストレージ)にコピーしておくと、復旧が早くなります。秘密情報は含まれません。
+- **`--min-instances=0` を必ず守る**。1 にすると常時起動でほぼ確実に無料枠を超えます
+- **`--max-instances=1` を維持**。`config.json` への同時書き込みを避ける目的でも 1 が安全です
+- 不要になったコンテナイメージは Artifact Registry でローテーション
+  - `gcloud artifacts docker images list asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/apps`
+  - 古いタグを削除すると Storage 課金が減ります
+- Cloud Build の無料枠 (1 日 120 分) で十分。CI 連携してビルド回数を制限してください
 
 ---
 
-## 7. トラブルシュート
+## 7. バックアップ・復旧
+
+- **データ本体**: スプレッドシートは Google Drive の「バージョン履歴」(ファイル → バージョン履歴) から過去状態に戻せます。重要な節目で「名前付きバージョン」を保存しておくと安心です
+- **設定**: `gsutil cp gs://YOUR_PROJECT_ID-shussekibo-config/config.json ~/Backup/` で随時バックアップ。`config.json` は秘密鍵を含まないので保管も気軽に
+
+---
+
+## 8. トラブルシュート
 
 | 症状 | 対処 |
 |---|---|
-| `/setup` で「ADC が検出できません」 | Cloud Run なら `--service-account` 指定を確認。ローカルなら `gcloud auth application-default login` を実行 |
-| 「接続テスト」で `The caller does not have permission` | スプレッドシートに「使用中のアカウント」を「編集者」共有 |
-| 接続テスト OK でも `/` で 503 が返る | 「設定を保存して初期化」を実行していない可能性。/setup に戻って「設定を保存して初期化」 |
-| Cloud Run で `config.json` が消える | Volume マウントが正しいか確認。`--add-volume` を忘れていると永続化されません |
-| ICS取込で 0 件 | URL が iCal フィードか確認。年度開始/終了の範囲内にイベントがあるかも要確認 |
-| 「使用中のアカウント」が個人メールアドレスになる | ローカル開発で `gcloud auth application-default login` を実行した状態。本番デプロイ時は Cloud Run の SA が表示されます |
+| デプロイ後 `/setup` で「ADC が検出できません」 | `--service-account shussekibo-runner@...` の指定漏れ。`gcloud run services describe arakawa-shussekibo --region asia-northeast1` で確認 |
+| 「接続テスト」で `The caller does not have permission` | スプレッドシートに `shussekibo-runner@...` を「編集者」共有 |
+| 接続テスト OK でも `/` で 503 が返る | 「設定を保存して初期化」未実行。`/setup` から再度保存 |
+| `config.json` が読めない / 書けない | GCS バケットへの権限 (`objectAdmin`) を確認。Volume Mount の bucket 名が正しいかも要確認 |
+| ICS取込で 0 件 | URL が iCal フィードか / 年度開始-終了の範囲内にイベントがあるかを確認 |
+| 起動が遅い (コールドスタート) | `--min-instances=0` の影響。許容できなければ 1 にすると常時起動だが無料枠は超える |
+| 無料枠超過の請求が来そう | Console → 課金 → 予算アラート で月額予算を $0 や $1 に設定 |
 
 ---
 
-## 8. セキュリティ上の注意
+## 9. セキュリティ上の注意
 
-- **JSON キーは作らない方針** です。万一 SA キーを使う場合は、最低権限・短期ローテーション・Secret Manager 経由の取り扱いを徹底してください。
-- ログイン機構はありません。**公開 URL を不特定多数に共有しない** 運用を前提としています。
-- Cloud Run の場合、`--no-allow-unauthenticated` で IAM 認証を要求する、Cloud Load Balancer + IAP で組織アカウント認証を被せる、等の対策を別途検討してください。
-- `config.json` には秘密鍵は含まれませんが、`spreadsheetId` の漏洩 = アクセスURLが推測されるリスクなので、サーバ上のパーミッションは `0600` で保存されます。
+- **SA キー JSON を作らない** 方針。必要になっても極力作成しないでください
+- ログイン機構はありません。**公開 URL を不特定多数に共有しない** 運用を前提としています
+- 利用者を限定したい場合は次のいずれかを検討:
+  - `--no-allow-unauthenticated` + 利用者の Google アカウントに `roles/run.invoker` を付与 (組織アカウントで認証強制)
+  - Cloud Load Balancer + IAP 経由でアクセス
+- `config.json` には秘密鍵は含まれませんが、`spreadsheetId` の漏洩 = アクセス URL が推測されるリスクなので、GCS バケットは公開せず IAM で絞ってください
+
+---
+
+## 10. 削除 (片付け)
+
+不要になった場合:
+
+```bash
+gcloud run services delete arakawa-shussekibo --region asia-northeast1
+gsutil rm -r gs://YOUR_PROJECT_ID-shussekibo-config
+gcloud artifacts repositories delete apps --location=asia-northeast1
+gcloud iam service-accounts delete shussekibo-runner@YOUR_PROJECT_ID.iam.gserviceaccount.com
+```
+
+スプレッドシートは Google ドライブに残ります (Cloud Run から切り離されるだけ)。
 
 以上。

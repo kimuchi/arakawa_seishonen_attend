@@ -19,22 +19,28 @@ Google Apps Script から Node.js (Express + Google Sheets API) に置き換え�
 - **設定ファイル**: `config.json` 1 つに集約。初回起動時の `/setup` 画面で GUI 設定 → ファイル書き込み
 - **認証は鍵レス (ADC)**: サービスアカウント JSON キーを作らず、Cloud Run のランタイム SA や `gcloud auth application-default login` の認証を自動採用
 
-## クイックスタート
+## クイックスタート (Cloud Run 無料枠)
 
 ```bash
-# 1. 依存をインストール
-npm install
+# プロジェクト/API/SA/GCSバケット/Artifact Registry の準備は DEPLOYMENT.md §1 を参照
 
-# 2. ADC 認証 (鍵レス、ローカル開発用)
-gcloud auth application-default login
-gcloud auth application-default set-quota-project YOUR_PROJECT_ID
+# ビルド
+gcloud builds submit \
+  --tag asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/apps/arakawa-shussekibo:latest
 
-# 3. サーバ起動
-npm start
-# → http://localhost:8080 → 自動で /setup へ
+# デプロイ
+gcloud run deploy arakawa-shussekibo \
+  --image asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/apps/arakawa-shussekibo:latest \
+  --region asia-northeast1 \
+  --allow-unauthenticated \
+  --memory 512Mi --cpu 1 --concurrency 1 \
+  --min-instances 0 --max-instances 1 \
+  --service-account shussekibo-runner@YOUR_PROJECT_ID.iam.gserviceaccount.com \
+  --set-env-vars TZ=Asia/Tokyo \
+  --add-volume name=cfg,type=cloud-storage,bucket=YOUR_PROJECT_ID-shussekibo-config \
+  --add-volume-mount volume=cfg,mount-path=/app/data
 
-# 4. /setup でスプレッドシート ID を登録 (認証は ADC 自動採用)
-#    → 自動でシート初期化 → アプリ利用開始
+# 表示された URL の /setup でスプレッドシート ID を登録 → 自動初期化 → 利用開始
 ```
 
 詳しくは [DEPLOYMENT.md](./DEPLOYMENT.md) を。
