@@ -68,13 +68,17 @@ function insertEvents_(eventList, options) {
     const sheet = getSheet_(SHEET_NAMES.EVENTS);
     if (!sheet) throw new Error('イベントシートがありません。initializeSpreadsheet()を先に実行してください。');
 
+    // 既存データの重複判定キーを作成。
+    //  - GイベントID (UID)
+    //  - 日付 + 正規化タイトル (NFKC・連続空白圧縮・小文字化)
     const existingObjs = sheetToObjects_(sheet);
     const existingIds = {};
     const existingDateTitle = {};
     existingObjs.forEach(r => {
-      if (r['GイベントID']) existingIds[String(r['GイベントID'])] = true;
+      const gid = String(r['GイベントID'] || '').trim();
+      if (gid) existingIds[gid] = true;
       const date = formatDate_(r['日付']);
-      const title = String(r['イベント名'] || '').trim().toLowerCase();
+      const title = normalizeTitle_(r['イベント名']);
       if (date && title) existingDateTitle[date + '|' + title] = true;
     });
 
@@ -84,39 +88,50 @@ function insertEvents_(eventList, options) {
     const rows = [];
     const imported = [];
     let skipped = 0;
+    const batchGid = {};
+    const batchKey = {};
 
     eventList.forEach(ev => {
-      if (ev.gEventId && existingIds[ev.gEventId]) { skipped++; return; }
+      const gid = String(ev.gEventId || '').trim();
+      if (gid && existingIds[gid]) { skipped++; return; }
+      if (gid && batchGid[gid]) { skipped++; return; }
       const eventDate = formatDate_(ev.startTime);
-      const eventTitle = String(ev.title || '(無題)').trim().toLowerCase();
-      const dupKey = eventDate + '|' + eventTitle;
+      const titleRaw = ev.title || '(無題)';
+      const titleNorm = normalizeTitle_(titleRaw);
+      const dupKey = eventDate + '|' + titleNorm;
       if (existingDateTitle[dupKey]) { skipped++; return; }
-      const classify = autoClassify ? classifyEventName_(ev.title) : { category: 'その他', subcategory: 'その他', dailyAllowance: defaultAllowance };
+      if (batchKey[dupKey]) { skipped++; return; }
+      const classify = autoClassify ? classifyEventName_(titleRaw) : { category: 'その他', subcategory: 'その他', dailyAllowance: defaultAllowance };
       const row = [
         nextId++,
         eventDate,
         ev.allDay ? '' : formatTime_(ev.startTime),
         ev.allDay ? '' : formatTime_(ev.endTime),
         !!ev.allDay,
-        ev.title || '(無題)',
+        titleRaw,
         classify.category,
         classify.subcategory,
         classify.dailyAllowance !== undefined ? classify.dailyAllowance : defaultAllowance,
         ev.location || '',
         ev.description || '',
         ev.gCalendarId || '',
-        ev.gEventId || '',
+        gid,
         true
       ];
       rows.push(row);
       existingDateTitle[dupKey] = true;
+      batchKey[dupKey] = true;
+      if (gid) batchGid[gid] = true;
       imported.push({
         id: row[0], date: row[1], title: row[5], category: row[6], subcategory: row[7]
       });
     });
 
     if (rows.length > 0) {
-      sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+      // getLastRow() はチェックボックス(false値)が並ぶとシート末を返すため、
+      // 実データのある最終行 (ID列) をベースに追記する。
+      const startRow = getLastDataRow_(sheet, 1) + 1;
+      sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
     }
 
     return { imported: rows.length, skipped: skipped, events: imported };
@@ -124,53 +139,137 @@ function insertEvents_(eventList, options) {
 }
 
 /**
+ * イベントシートに既に登録されている重複イベントを 1 件残して削除する。
+ * 重複の判定: 「日付 + 正規化タイトル」が一致するものは同じイベントとみなす。
+ * 「GイベントID」も同じものが複数あればまとめて 1 件に。
+ * 関連する出席行も、削除対象のイベントIDだけ削除する。
+ *
+ * @return {{removed:number, kept:number}}
+ */
+function dedupExistingEvents_() {
+  return withLock_(() => {
+    const sheet = getSheet_(SHEET_NAMES.EVENTS);
+    if (!sheet) throw new Error('イベントシートがありません。');
+    const lastRow = getLastDataRow_(sheet, 1);
+    if (lastRow < 2) return { removed: 0, kept: 0 };
+    const lastCol = 14;
+    const values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+    const seenKey = {};
+    const seenGid = {};
+    const removeIds = [];
+    const keptRows = [];
+    values.forEach((row) => {
+      const id = Number(row[0]);
+      if (!id) return;
+      const date = formatDate_(row[1]);
+      const title = normalizeTitle_(row[5]);
+      const gid = String(row[12] || '').trim();
+      const key = date + '|' + title;
+      if (gid && seenGid[gid]) { removeIds.push(id); return; }
+      if (date && title && seenKey[key]) { removeIds.push(id); return; }
+      if (gid) seenGid[gid] = true;
+      if (date && title) seenKey[key] = true;
+      keptRows.push(row);
+    });
+
+    if (removeIds.length === 0) return { removed: 0, kept: keptRows.length };
+
+    // シートを書き換える: 残す行だけを再書き込み、余剰行はクリア。
+    sheet.getRange(2, 1, lastRow - 1, lastCol).clearContent();
+    if (keptRows.length > 0) {
+      sheet.getRange(2, 1, keptRows.length, lastCol).setValues(keptRows);
+    }
+
+    // 関連する出席行も削除
+    const att = getSheet_(SHEET_NAMES.ATTENDANCE);
+    if (att && att.getLastRow() >= 2) {
+      const lastAttRow = getLastDataRow_(att, 1);
+      const attValues = att.getRange(2, 1, lastAttRow - 1, 7).getValues();
+      const removeSet = {};
+      removeIds.forEach(id => { removeSet[id] = true; });
+      for (let i = attValues.length - 1; i >= 0; i--) {
+        if (removeSet[Number(attValues[i][1])]) {
+          att.deleteRow(i + 2);
+        }
+      }
+    }
+    return { removed: removeIds.length, kept: keptRows.length };
+  });
+}
+
+function api_dedupExistingEvents() {
+  try {
+    return { ok: true, data: dedupExistingEvents_() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/**
  * イベント名から分類を自動推定する。
- * シンプルなキーワードマッチだが、前年度のイベント名パターンをカバー。
+ * シートに登録された「ICS取込ルール」を表示順で評価する。
+ * シートが空・未初期化の場合は INITIAL_ICS_RULES をフォールバック。
  * @return {{category:string, subcategory:string, dailyAllowance:boolean}}
  */
 function classifyEventName_(name) {
   const n = String(name || '');
-  const map = [
-    // ブロック
-    { re: /(ブロック研修|城北ブロック|ブロック会議)/, c: 'ブロック', s: '全ブロック合同', a: true },
-    // 実践部会(タグ付き)
-    { re: /【校庭】|校庭利用|みんなで遊ぼう/, c: '実践部会', s: '校庭', a: true },
-    { re: /【少年】|少年企画|少年部会/, c: '実践部会', s: '少年', a: true },
-    { re: /【青年】|青年部会|青年企画/, c: '実践部会', s: '青年', a: true },
-    // 専門部会(タグ付き)
-    { re: /【調査研修】|調査研修部会/, c: '専門部会', s: '調査研修', a: true },
-    { re: /【総務】|総務部会/, c: '専門部会', s: '総務', a: true },
-    { re: /【広報】|広報部会/, c: '専門部会', s: '広報', a: true },
-    // 関連団体
-    { re: /【都連】|都連|東京都青少年委員|青少年委員大会/, c: '関連団体', s: '都連(東京都青少年委員会連合会)', a: true },
-    { re: /荒小連|中高生キャンプ/, c: '関連団体', s: '荒小連(荒川小学生連合)', a: true },
-    { re: /子ども会/, c: '関連団体', s: '子ども会', a: true },
-    { re: /ロータリー/, c: '関連団体', s: 'ロータリークラブ', a: false },
-    { re: /アリストック/, c: '関連団体', s: 'アリストック', a: true },
-    { re: /青少年問題協議/, c: '関連団体', s: '青少年問題協議会', a: true },
-    { re: /薬物乱用/, c: '関連団体', s: '薬物乱用防止推進協議会', a: true },
-    { re: /社会を明るくする/, c: '関連団体', s: '社会を明るくする運動', a: true },
-    // 全体事業
-    { re: /定例会/, c: '全体事業', s: '定例会', a: true },
-    { re: /(荒青連|青少年委員連絡会)総会|総会・懇親会|総会/, c: '全体事業', s: '総会', a: true },
-    { re: /チャレンジ共和国|プレチャレンジ/, c: '全体事業', s: 'チャレンジ共和国', a: true },
-    { re: /チャレンジキャンプ/, c: '全体事業', s: 'チャレンジキャンプ', a: true },
-    { re: /さくら教室|さくらお楽しみ/, c: '全体事業', s: 'さくら教室', a: true },
-    { re: /川の手|あらかわまつり/, c: '全体事業', s: '川の手あらかわまつり', a: true },
-    { re: /二十歳のつどい|はたちのつどい/, c: '全体事業', s: '二十歳のつどい', a: true },
-    { re: /退任式/, c: '全体事業', s: '退任式', a: true },
-    { re: /宿泊研修/, c: '全体事業', s: '宿泊研修', a: true },
-    { re: /日帰り研修/, c: '全体事業', s: '日帰り研修', a: true },
-    { re: /忘年会|懇親会/, c: '全体事業', s: '忘年会・懇親会', a: false },
-    { re: /自主研修/, c: '全体事業', s: '自主研修', a: false },
-    { re: /タノシバ/, c: '全体事業', s: 'タノシバ', a: true }
-  ];
-  for (let i = 0; i < map.length; i++) {
-    if (map[i].re.test(n)) {
-      return { category: map[i].c, subcategory: map[i].s, dailyAllowance: map[i].a };
+  const rules = loadIcsRules_();
+  for (let i = 0; i < rules.length; i++) {
+    const r = rules[i];
+    if (!r.active) continue;
+    if (!r.pattern) continue;
+    let hit = false;
+    if (r.matchType === 'regex') {
+      try {
+        const re = new RegExp(r.pattern);
+        hit = re.test(n);
+      } catch (e) {
+        hit = false;
+      }
+    } else {
+      hit = n.indexOf(r.pattern) >= 0;
+    }
+    if (hit) {
+      return {
+        category: r.category || 'その他',
+        subcategory: r.subcategory || '',
+        dailyAllowance: !!r.defaultAllowance
+      };
     }
   }
   return { category: 'その他', subcategory: 'その他', dailyAllowance: false };
+}
+
+/**
+ * ICS取込ルールを「ICS取込ルール」シートから読み出す。
+ * シートが無い・空の場合は INITIAL_ICS_RULES をそのまま返す。
+ */
+function loadIcsRules_() {
+  try {
+    const sheet = getSheet_(SHEET_NAMES.ICS_RULES);
+    if (sheet && sheet.getLastRow() >= 2) {
+      const rows = sheetToObjects_(sheet);
+      const rules = rows.map(r => ({
+        pattern: String(r['パターン'] || ''),
+        matchType: String(r['マッチタイプ'] || 'contains'),
+        category: String(r['分類'] || ''),
+        subcategory: String(r['サブ分類'] || ''),
+        defaultAllowance: r['日当対象デフォルト'] === true,
+        order: Number(r['表示順']) || 0,
+        active: r['有効'] !== false
+      })).sort((a, b) => a.order - b.order);
+      return rules;
+    }
+  } catch (e) {}
+  return (typeof INITIAL_ICS_RULES !== 'undefined' ? INITIAL_ICS_RULES : []).map(r => ({
+    pattern: r.pattern,
+    matchType: r.matchType || 'contains',
+    category: r.category,
+    subcategory: r.subcategory,
+    defaultAllowance: !!r.defaultAllowance,
+    order: 0,
+    active: true
+  }));
 }
 
 // ===========================================================

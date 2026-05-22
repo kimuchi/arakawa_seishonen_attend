@@ -174,6 +174,15 @@ function resolveDateRange_(opt, settings) {
       const to = (fy + 2) + '-03-31';
       return { from: from, to: to, label: fy + '年度〜' + (fy + 1) + '年度 (' + from + ' ～ ' + to + ')' };
     }
+    case 'fiscalYearHalf': {
+      const fy = Number(opt.fiscalYear);
+      const half = String(opt.half || '').toLowerCase();
+      if (!fy) throw new Error('集計年度が不正です。');
+      if (half !== 'h1' && half !== 'h2') throw new Error('上半期/下半期の指定が不正です。');
+      const r = fiscalHalfRange_(fy, half, settings);
+      const labelHalf = half === 'h1' ? '上半期' : '下半期';
+      return { from: r.from, to: r.to, label: fy + '年度 ' + labelHalf + ' (' + r.from + ' ～ ' + r.to + ')' };
+    }
     case 'firstHalf':
       return { from: start, to: firstHalfEnd, label: '上半期 (' + start + ' ～ ' + firstHalfEnd + ')' };
     case 'secondHalf':
@@ -184,6 +193,40 @@ function resolveDateRange_(opt, settings) {
     default:
       return { from: start, to: end, label: '年度 (' + start + ' ～ ' + end + ')' };
   }
+}
+
+/**
+ * 設定の上半期終了日(月日)を踏まえつつ、任意年度の上半期/下半期の期間を返す。
+ *  - 上半期終了日が未設定または不正なら 9/30 を採用。
+ *  - h1: 4/1 〜 上半期終了日(その年度)
+ *  - h2: (上半期終了日+1) 〜 翌年度3/31
+ */
+function fiscalHalfRange_(fiscalYear, half, settings) {
+  const fy = Number(fiscalYear);
+  // 上半期終了日 (月日) を抽出
+  let halfEndMonth = 9;
+  let halfEndDay = 30;
+  const raw = (settings && settings['上半期終了日']) || FISCAL_YEAR_DEFAULT.FIRST_HALF_END;
+  const m = String(raw).match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (m) {
+    halfEndMonth = parseInt(m[2], 10);
+    halfEndDay = parseInt(m[3], 10);
+  }
+  const pad = n => String(n).padStart(2, '0');
+  const fyStart = fy + '-04-01';
+  const fyEnd   = (fy + 1) + '-03-31';
+  const halfEnd = fy + '-' + pad(halfEndMonth) + '-' + pad(halfEndDay);
+  // 翌日 (h2 の開始)
+  const halfEndDate = parseDate_(halfEnd);
+  let h2StartStr = (fy + '-' + pad(halfEndMonth) + '-' + pad(halfEndDay + 1));
+  if (halfEndDate) {
+    halfEndDate.setDate(halfEndDate.getDate() + 1);
+    h2StartStr = formatDate_(halfEndDate);
+  }
+  if (half === 'h1') {
+    return { from: fyStart, to: halfEnd, fiscalYear: fy, half: 'h1' };
+  }
+  return { from: h2StartStr, to: fyEnd, fiscalYear: fy, half: 'h2' };
 }
 
 /**

@@ -9,7 +9,8 @@ const SHEET_NAMES = {
   EVENTS: 'イベント',
   ATTENDANCE: '出席',
   SETTINGS: '設定',
-  CLASSIFICATION: '分類マスタ'
+  CLASSIFICATION: '分類マスタ',
+  ICS_RULES: 'ICS取込ルール'
 };
 
 // ===== スプレッドシートID保存キー =====
@@ -112,6 +113,60 @@ const INITIAL_MEMBERS = [
   { no: 34, district: '日暮里',    name: '寺本英夫',    term: '2期', role: '少年副部長',       jissen: '少年', senmon: '総務' },
   { no: 35, district: '日暮里',    name: '松本沙織',    term: '2期', role: 'ブロック長',       jissen: '青年', senmon: '総務' },
   { no: 36, district: '日暮里',    name: '永井陽子',    term: '1期', role: '副ブロック長',     jissen: '校庭', senmon: '調査研修' }
+];
+
+// ===== ICS取込ルール（初期値） =====
+// 取込時に、イベント名にキーワードが含まれていれば分類を割り当てる。
+// 上から順に評価し、最初にヒットしたものが採用される。表示順で並び替え可能。
+// マッチタイプ: 'contains' (部分一致), 'regex' (正規表現)
+const INITIAL_ICS_RULES = [
+  // ブロック (区名)
+  { pattern: '南千住',           matchType: 'contains', category: 'ブロック',   subcategory: '南千住',                       defaultAllowance: false },
+  { pattern: '荒川',             matchType: 'contains', category: 'ブロック',   subcategory: '荒川・町屋',                   defaultAllowance: false },
+  { pattern: '町屋',             matchType: 'contains', category: 'ブロック',   subcategory: '荒川・町屋',                   defaultAllowance: false },
+  { pattern: '尾久',             matchType: 'contains', category: 'ブロック',   subcategory: '尾久',                         defaultAllowance: false },
+  { pattern: '日暮里',           matchType: 'contains', category: 'ブロック',   subcategory: '日暮里',                       defaultAllowance: false },
+  { pattern: '全ブロック合同',   matchType: 'contains', category: 'ブロック',   subcategory: '全ブロック合同',               defaultAllowance: false },
+  // 実践部会 (タグ・キーワード)
+  { pattern: '【校庭】',         matchType: 'contains', category: '実践部会',   subcategory: '校庭',                         defaultAllowance: true },
+  { pattern: '校庭利用',         matchType: 'contains', category: '実践部会',   subcategory: '校庭',                         defaultAllowance: true },
+  { pattern: '【少年】',         matchType: 'contains', category: '実践部会',   subcategory: '少年',                         defaultAllowance: true },
+  { pattern: '少年部会',         matchType: 'contains', category: '実践部会',   subcategory: '少年',                         defaultAllowance: true },
+  { pattern: '【青年】',         matchType: 'contains', category: '実践部会',   subcategory: '青年',                         defaultAllowance: true },
+  { pattern: '青年部会',         matchType: 'contains', category: '実践部会',   subcategory: '青年',                         defaultAllowance: true },
+  // 専門部会
+  { pattern: '【総務】',         matchType: 'contains', category: '専門部会',   subcategory: '総務',                         defaultAllowance: true },
+  { pattern: '総務部会',         matchType: 'contains', category: '専門部会',   subcategory: '総務',                         defaultAllowance: true },
+  { pattern: '【調査研修】',     matchType: 'contains', category: '専門部会',   subcategory: '調査研修',                     defaultAllowance: true },
+  { pattern: '調査研修部会',     matchType: 'contains', category: '専門部会',   subcategory: '調査研修',                     defaultAllowance: true },
+  { pattern: '【広報】',         matchType: 'contains', category: '専門部会',   subcategory: '広報',                         defaultAllowance: true },
+  { pattern: '広報部会',         matchType: 'contains', category: '専門部会',   subcategory: '広報',                         defaultAllowance: true },
+  // 関連団体
+  { pattern: 'アリストック',     matchType: 'contains', category: '関連団体',   subcategory: '荒小連(荒川小学生連合)',       defaultAllowance: true },
+  { pattern: '荒小連',           matchType: 'contains', category: '関連団体',   subcategory: '荒小連(荒川小学生連合)',       defaultAllowance: true },
+  { pattern: '都連',             matchType: 'contains', category: '関連団体',   subcategory: '都連(東京都青少年委員会連合会)', defaultAllowance: true },
+  { pattern: '東京都青少年委員', matchType: 'contains', category: '関連団体',   subcategory: '都連(東京都青少年委員会連合会)', defaultAllowance: true },
+  { pattern: '子ども会',         matchType: 'contains', category: '関連団体',   subcategory: '子ども会',                     defaultAllowance: true },
+  { pattern: 'ロータリー',       matchType: 'contains', category: '関連団体',   subcategory: 'ロータリークラブ',             defaultAllowance: false },
+  { pattern: '青少年問題協議',   matchType: 'contains', category: '関連団体',   subcategory: '青少年問題協議会',             defaultAllowance: true },
+  { pattern: '薬物乱用',         matchType: 'contains', category: '関連団体',   subcategory: '薬物乱用防止推進協議会',       defaultAllowance: true },
+  { pattern: '社会を明るくする', matchType: 'contains', category: '関連団体',   subcategory: '社会を明るくする運動',         defaultAllowance: true },
+  // 全体事業
+  { pattern: '定例会',           matchType: 'contains', category: '全体事業',   subcategory: '定例会',                       defaultAllowance: true },
+  { pattern: '総会',             matchType: 'contains', category: '全体事業',   subcategory: '総会',                         defaultAllowance: true },
+  { pattern: 'チャレンジ共和国', matchType: 'contains', category: '全体事業',   subcategory: 'チャレンジ共和国',             defaultAllowance: true },
+  { pattern: 'チャレンジキャンプ', matchType: 'contains', category: '全体事業', subcategory: 'チャレンジキャンプ',           defaultAllowance: true },
+  { pattern: 'さくら教室',       matchType: 'contains', category: '全体事業',   subcategory: 'さくら教室',                   defaultAllowance: true },
+  { pattern: 'あらかわまつり',   matchType: 'contains', category: '全体事業',   subcategory: '川の手あらかわまつり',         defaultAllowance: true },
+  { pattern: '川の手',           matchType: 'contains', category: '全体事業',   subcategory: '川の手あらかわまつり',         defaultAllowance: true },
+  { pattern: '二十歳のつどい',   matchType: 'contains', category: '全体事業',   subcategory: '二十歳のつどい',               defaultAllowance: true },
+  { pattern: '退任式',           matchType: 'contains', category: '全体事業',   subcategory: '退任式',                       defaultAllowance: true },
+  { pattern: '宿泊研修',         matchType: 'contains', category: '全体事業',   subcategory: '宿泊研修',                     defaultAllowance: true },
+  { pattern: '日帰り研修',       matchType: 'contains', category: '全体事業',   subcategory: '日帰り研修',                   defaultAllowance: true },
+  { pattern: '忘年会',           matchType: 'contains', category: '全体事業',   subcategory: '忘年会・懇親会',               defaultAllowance: false },
+  { pattern: '懇親会',           matchType: 'contains', category: '全体事業',   subcategory: '忘年会・懇親会',               defaultAllowance: false },
+  { pattern: '自主研修',         matchType: 'contains', category: '全体事業',   subcategory: '自主研修',                     defaultAllowance: false },
+  { pattern: 'タノシバ',         matchType: 'contains', category: '全体事業',   subcategory: 'タノシバ',                     defaultAllowance: true }
 ];
 
 // ===== 出席区分 =====

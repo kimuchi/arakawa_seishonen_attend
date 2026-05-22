@@ -25,6 +25,7 @@ function initializeSpreadsheet() {
     ensureAttendanceSheet_(ss);
     ensureSettingsSheet_(ss);
     ensureClassificationSheet_(ss);
+    ensureIcsRulesSheet_(ss);
   });
   // デフォルトの「シート1」が残っていれば削除
   try {
@@ -231,6 +232,40 @@ function ensureClassificationSheet_(ss) {
   }
   applyBooleanValidation_(sheet, 4);
   applyBooleanValidation_(sheet, 6);
+}
+
+// ===========================================================
+// ICS取込ルールシート
+// ===========================================================
+function ensureIcsRulesSheet_(ss) {
+  const headers = ['ID', 'パターン', 'マッチタイプ', '分類', 'サブ分類', '日当対象デフォルト', '表示順', '有効'];
+  const sheet = ss.getSheetByName(SHEET_NAMES.ICS_RULES) || ss.insertSheet(SHEET_NAMES.ICS_RULES);
+  writeHeaders_(sheet, headers);
+  sheet.setFrozenRows(1);
+  sheet.setColumnWidth(1, 50);
+  sheet.setColumnWidth(2, 220);
+  sheet.setColumnWidth(3, 110);
+  sheet.setColumnWidth(4, 120);
+  sheet.setColumnWidth(5, 220);
+  sheet.setColumnWidth(6, 140);
+  sheet.setColumnWidth(7, 80);
+  sheet.setColumnWidth(8, 60);
+  if (sheet.getLastRow() < 2) {
+    const rows = INITIAL_ICS_RULES.map((r, idx) => ([
+      idx + 1,
+      r.pattern,
+      r.matchType || 'contains',
+      r.category,
+      r.subcategory,
+      !!r.defaultAllowance,
+      (idx + 1) * 10,
+      true
+    ]));
+    sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+  }
+  applyValidation_(sheet, 3, ['contains', 'regex']);
+  applyBooleanValidation_(sheet, 6);
+  applyBooleanValidation_(sheet, 8);
 }
 
 // ===========================================================

@@ -183,10 +183,11 @@ async function renderDashboard() {
   const upcoming = APP.events.filter(e => e.date >= today).slice(0, 6);
   const past = APP.events.filter(e => e.date < today).slice(-6).reverse();
 
-  // サマリ（年度全体）
+  const baseYear = Number(APP.settings['年度']) || 2026;
+  // 2年分通算サマリ
   let summary;
   try {
-    summary = await callApi('api_summarizeByMember', { period: 'fullYear' });
+    summary = await callApi('api_summarizeByMember', { period: 'twoFiscalYears', startFiscalYear: baseYear });
   } catch (e) {
     summary = null;
   }
@@ -201,7 +202,7 @@ async function renderDashboard() {
       <div class="stat">
         <div class="stat__label">登録イベント数</div>
         <div class="stat__value">${totalEvents}</div>
-        <div class="stat__desc">うち日当対象 ${totalAllowanceEvents} 件</div>
+        <div class="stat__desc">うち日当対象 ${totalAllowanceEvents} 件 / 2年分</div>
       </div>
       <div class="stat">
         <div class="stat__label">メンバ数</div>
@@ -211,12 +212,12 @@ async function renderDashboard() {
       <div class="stat">
         <div class="stat__label">出席記録 合計</div>
         <div class="stat__value">${totalAttendances}</div>
-        <div class="stat__desc">年度累計の出席延べ人数</div>
+        <div class="stat__desc">${baseYear}・${baseYear + 1}年度の延べ人数</div>
       </div>
-      <div class="stat">
-        <div class="stat__label">日当総額 (年度累計)</div>
-        <div class="stat__value stat__value--money">${totalAllowance.toLocaleString()}</div>
-        <div class="stat__desc">@ ¥${APP.settings['日当単価'] || 500}</div>
+      <div class="stat stat--hero">
+        <div class="stat__label">日当総額 (2年通算)</div>
+        <div class="stat__value stat__value--money stat__value--xl">${totalAllowance.toLocaleString()}</div>
+        <div class="stat__desc">@ ¥${APP.settings['日当単価'] || 500} / ${baseYear}・${baseYear + 1}年度</div>
       </div>
     </div>
 
@@ -497,7 +498,9 @@ async function renderEventsTab() {
       <p class="card__subtitle">イベントの追加・編集・削除。Script Properties の ICS URL から一括取込ができます。</p>
       <div class="btn-group mb-4">
         <button class="btn btn--primary" id="btnAddEvent">+ 新規イベント</button>
-        <button class="btn" id="btnImportIcsAuto">🔄 ICSを自動取込</button>
+        <button class="btn" id="btnImportIcs1y">🔄 ICSを1年分取込</button>
+        <button class="btn btn--ghost" id="btnImportIcs2y">📥 ICSを2年分取込</button>
+        <button class="btn btn--danger" id="btnDedupEvents">🧹 重複イベントを掃除</button>
       </div>
 
       <div class="filter-bar">
@@ -520,7 +523,9 @@ async function renderEventsTab() {
     </div>
   `;
   document.getElementById('btnAddEvent').addEventListener('click', () => openEventModal());
-  document.getElementById('btnImportIcsAuto').addEventListener('click', runConfiguredIcsImport);
+  document.getElementById('btnImportIcs1y').addEventListener('click', () => runConfiguredIcsImport(1));
+  document.getElementById('btnImportIcs2y').addEventListener('click', () => runConfiguredIcsImport(2));
+  document.getElementById('btnDedupEvents').addEventListener('click', runDedupEvents);
   ['evFilterCategory', 'evFilterAllowance', 'evFilterTitle'].forEach(id => {
     const el = document.getElementById(id);
     el.addEventListener('change', renderEventRows_);
@@ -711,10 +716,41 @@ function openEventModal(ev) {
   });
 }
 
-async function runConfiguredIcsImport() {
-  const from = APP.settings['年度開始日'] || '2026-04-01';
-  const to = APP.settings['年度終了日'] || '2027-03-31';
-  if (!confirm(`Script Properties の ICS_IMPORT_URL から取り込みます。\n対象期間: ${from} ～ ${to}\n実行しますか？`)) return;
+// ICS取込 (1年/2年で範囲を切替)
+async function runDedupEvents() {
+  if (!confirm('「日付 + イベント名」または「GイベントID」が同じイベントを 1 件残して削除します。\n対象に紐づく出席行も削除されます。実行しますか？')) return;
+  showLoader(true);
+  try {
+    const r = await callApi('api_dedupExistingEvents');
+    toast(`重複を削除しました: ${r.removed}件削除 / ${r.kept}件保持`, 'success');
+    APP.events = await callApi('api_listEvents', {});
+    renderEventRows_();
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function runConfiguredIcsImport(spanYears) {
+  const baseStart = APP.settings['年度開始日'] || '2026-04-01';
+  const baseEnd = APP.settings['年度終了日'] || '2027-03-31';
+  const span = (spanYears === 2) ? 2 : 1;
+  let from = baseStart;
+  let to = baseEnd;
+  if (span === 2) {
+    // 2年分: 年度開始 〜 年度終了の翌年同日 (2026-04-01 〜 2028-03-31 の想定)
+    const endDate = new Date(baseEnd);
+    if (!isNaN(endDate.getTime())) {
+      endDate.setFullYear(endDate.getFullYear() + 1);
+      const y = endDate.getFullYear();
+      const m = String(endDate.getMonth() + 1).padStart(2, '0');
+      const d = String(endDate.getDate()).padStart(2, '0');
+      to = `${y}-${m}-${d}`;
+    }
+  }
+  const label = span === 2 ? '2年分' : '1年分';
+  if (!confirm(`Script Properties の ICS_IMPORT_URL から${label}取り込みます。\n対象期間: ${from} ～ ${to}\n実行しますか？`)) return;
   showLoader(true);
   try {
     const r = await callApi('api_importFromConfiguredIcs', from, to, { autoClassify: true });
@@ -893,19 +929,21 @@ function openMemberModal(m) {
 // ==========================================================
 async function renderSummaryTab() {
   const panel = document.getElementById('tab-summary');
+  const baseYear = Number(APP.settings['年度']) || 2026;
   panel.innerHTML = `
     <div class="card">
       <h2 class="card__title">📈 集計</h2>
-      <p class="card__subtitle">人別の出席数・日当額を確認できます。上半期/下半期でも集計可能です。</p>
+      <p class="card__subtitle">人別の出席数・日当額を確認できます。年度・上下半期・四半期(2年分=8四半期)・任意期間に対応。</p>
       <div class="filter-bar">
         <label>期間
           <select id="sumPeriod">
-            <option value="fullYear">年度通算</option>
-            <option value="fiscalCurrent">設定年度 (例: 2026年度)</option>
-            <option value="fiscalNext">次年度 (例: 2027年度)</option>
-            <option value="twoFiscalYears">2年度通算 (2026・2027年度)</option>
-            <option value="firstHalf">上半期</option>
-            <option value="secondHalf">下半期</option>
+            <option value="twoFiscalYears">2年度通算 (${baseYear}・${baseYear + 1}年度)</option>
+            <option value="fiscalCurrent">設定年度 (${baseYear}年度)</option>
+            <option value="fiscalNext">次年度 (${baseYear + 1}年度)</option>
+            <option value="y1h1">1年目 上半期 (${baseYear}年度 4-9月)</option>
+            <option value="y1h2">1年目 下半期 (${baseYear}年度 10月-翌3月)</option>
+            <option value="y2h1">2年目 上半期 (${baseYear + 1}年度 4-9月)</option>
+            <option value="y2h2">2年目 下半期 (${baseYear + 1}年度 10月-翌3月)</option>
             <option value="custom">カスタム</option>
           </select>
         </label>
@@ -922,9 +960,9 @@ async function renderSummaryTab() {
     </div>
   `;
   document.getElementById('sumPeriod').addEventListener('change', (e) => {
-    const isCustom = e.target.value === 'custom';
-    document.getElementById('sumFromWrap').classList.toggle('hidden', !isCustom);
-    document.getElementById('sumToWrap').classList.toggle('hidden', !isCustom);
+    const v = e.target.value;
+    document.getElementById('sumFromWrap').classList.toggle('hidden', v !== 'custom');
+    document.getElementById('sumToWrap').classList.toggle('hidden', v !== 'custom');
   });
   document.getElementById('btnRunSummary').addEventListener('click', runSummary);
   document.getElementById('btnCsvSummary').addEventListener('click', downloadSummaryCsv);
@@ -940,6 +978,10 @@ async function runSummary() {
   if (period === 'fiscalCurrent') query = { period: 'fiscalYear', fiscalYear: baseYear };
   if (period === 'fiscalNext') query = { period: 'fiscalYear', fiscalYear: baseYear + 1 };
   if (period === 'twoFiscalYears') query = { period: 'twoFiscalYears', startFiscalYear: baseYear };
+  if (period === 'y1h1') query = { period: 'fiscalYearHalf', fiscalYear: baseYear, half: 'h1' };
+  if (period === 'y1h2') query = { period: 'fiscalYearHalf', fiscalYear: baseYear, half: 'h2' };
+  if (period === 'y2h1') query = { period: 'fiscalYearHalf', fiscalYear: baseYear + 1, half: 'h1' };
+  if (period === 'y2h2') query = { period: 'fiscalYearHalf', fiscalYear: baseYear + 1, half: 'h2' };
   showLoader(true);
   try {
     const res = await callApi('api_summarizeByMember', query);
@@ -988,35 +1030,27 @@ async function runSummary() {
           </tbody>
         </table>
       </div>
-      <div class="card mt-4">
+      <div class="card mt-4 card--accent">
         <h3 class="card__title">🏷️ ブロック別（日当）合計</h3>
-        <div class="tbl-wrap">
-          <table class="tbl tbl--compact">
-            <thead>
-              <tr>
-                <th>ブロック</th>
-                <th class="num">出席回数</th>
-                <th class="num">日当対象出席</th>
-                <th class="num">金額</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${ds.map(d => `
-                <tr>
-                  <td><strong>${esc(d.district)}</strong></td>
-                  <td class="num">${d.attendCount}</td>
-                  <td class="num">${d.allowanceCount}</td>
-                  <td class="num">¥${d.allowanceAmount.toLocaleString()}</td>
-                </tr>
-              `).join('')}
-              <tr style="background:#eff6ff; font-weight:700;">
-                <td class="num">合計</td>
-                <td class="num">${ds.reduce((a,d)=>a+d.attendCount,0)}</td>
-                <td class="num">${ds.reduce((a,d)=>a+d.allowanceCount,0)}</td>
-                <td class="num">¥${ds.reduce((a,d)=>a+d.allowanceAmount,0).toLocaleString()}</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="block-grid">
+          ${ds.map((d, idx) => `
+            <div class="block-card block-card--c${idx % 5}">
+              <div class="block-card__name">${esc(d.district)}</div>
+              <div class="block-card__amount">¥${d.allowanceAmount.toLocaleString()}</div>
+              <div class="block-card__sub">
+                <span>出席 ${d.attendCount}回</span>
+                <span>日当対象 ${d.allowanceCount}回</span>
+              </div>
+            </div>
+          `).join('')}
+          <div class="block-card block-card--total">
+            <div class="block-card__name">全ブロック合計</div>
+            <div class="block-card__amount">¥${ds.reduce((a,d)=>a+d.allowanceAmount,0).toLocaleString()}</div>
+            <div class="block-card__sub">
+              <span>出席 ${ds.reduce((a,d)=>a+d.attendCount,0)}回</span>
+              <span>日当対象 ${ds.reduce((a,d)=>a+d.allowanceCount,0)}回</span>
+            </div>
+          </div>
         </div>
       </div>
     `;
@@ -1060,7 +1094,7 @@ function downloadSummaryCsv() {
 // ==========================================================
 // 設定タブ
 // ==========================================================
-function renderSettingsTab() {
+async function renderSettingsTab() {
   const panel = document.getElementById('tab-settings');
   const entries = Object.keys(APP.settings || {}).map(k => ({ key: k, value: APP.settings[k] }));
   panel.innerHTML = `
@@ -1082,11 +1116,62 @@ function renderSettingsTab() {
         </table>
       </div>
     </div>
+
+    <div class="card">
+      <h2 class="card__title">🏷️ 分類マスタ</h2>
+      <p class="card__subtitle">分類(大区分)とサブ分類の組み合わせ、日当対象デフォルト、表示順、有効/無効を管理します。表示順は ↑↓ で簡単に入れ替え可能。</p>
+      <div class="btn-group mb-4">
+        <button class="btn btn--primary btn--sm" id="btnAddClassification">+ 分類を追加</button>
+        <button class="btn btn--sm" id="btnReloadClassifications">🔄 再読込</button>
+      </div>
+      <div class="sortlist">
+        <div class="sortlist__row sortlist__row--header">
+          <div class="sortlist__handle">#</div>
+          <div>分類</div>
+          <div>サブ分類</div>
+          <div>日当デフォルト</div>
+          <div>有効</div>
+          <div>操作</div>
+        </div>
+        <div id="classificationList"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 class="card__title">📥 ICS取込ルール</h2>
+      <p class="card__subtitle">ICS取込時にイベント名と照合するキーワードを登録します。上から順に評価され、最初に当たったルールが使われます。「南千住→ブロック/南千住」「アリストック→関連団体/荒小連」のような独自ルールも追加できます。</p>
+      <div class="btn-group mb-4">
+        <button class="btn btn--primary btn--sm" id="btnAddRule">+ ルールを追加</button>
+        <button class="btn btn--sm" id="btnReloadRules">🔄 再読込</button>
+        <span class="pill pill--muted" id="rulesCount"></span>
+      </div>
+      <div class="filter-bar mb-4">
+        <label>イベント名でテスト
+          <input type="text" id="rulePreviewName" placeholder="例: 南千住ブロック会議" style="min-width: 240px;">
+        </label>
+        <button class="btn btn--sm" id="btnPreviewRule">テスト分類</button>
+        <span id="rulePreviewResult" class="pill pill--muted">テスト未実行</span>
+      </div>
+      <div class="sortlist sortlist--rules">
+        <div class="sortlist__row sortlist__row--header">
+          <div class="sortlist__handle">#</div>
+          <div>パターン</div>
+          <div>マッチ</div>
+          <div>分類 / サブ分類</div>
+          <div>日当デフォルト</div>
+          <div>有効</div>
+          <div>操作</div>
+        </div>
+        <div id="rulesList"></div>
+      </div>
+    </div>
+
     <div class="card">
       <h3 class="card__title">🔧 管理</h3>
       <div class="btn-group">
         <button class="btn" id="btnOpenSheetFromSettings">📄 スプレッドシートを開く</button>
         <button class="btn" id="btnReloadAll">🔄 データ再読込</button>
+        <button class="btn" id="btnReinitSheets">🛠️ シート再構築 (ICS取込ルールシート追加など)</button>
       </div>
     </div>
   `;
@@ -1123,6 +1208,324 @@ function renderSettingsTab() {
       showLoader(false);
     }
   });
+  document.getElementById('btnReinitSheets').addEventListener('click', async () => {
+    if (!confirm('既存データは保持したまま、不足しているシート(分類マスタ・ICS取込ルール等)を作成・補完します。実行しますか？')) return;
+    showLoader(true);
+    try {
+      await callApi('api_initializeSpreadsheet');
+      toast('シートを再構築しました', 'success');
+      await reloadAll();
+      renderSettingsTab();
+    } catch (e) {
+      toast('エラー: ' + e.message, 'error');
+    } finally {
+      showLoader(false);
+    }
+  });
+  document.getElementById('btnAddClassification').addEventListener('click', () => addClassificationRow());
+  document.getElementById('btnReloadClassifications').addEventListener('click', () => loadClassificationsEditor());
+  document.getElementById('btnAddRule').addEventListener('click', () => addRuleRow());
+  document.getElementById('btnReloadRules').addEventListener('click', () => loadRulesEditor());
+  document.getElementById('btnPreviewRule').addEventListener('click', previewRuleClassification);
+
+  await loadClassificationsEditor();
+  await loadRulesEditor();
+}
+
+// ----- 分類マスタ編集 -----
+async function loadClassificationsEditor() {
+  const box = document.getElementById('classificationList');
+  if (!box) return;
+  box.innerHTML = '<div class="text-muted">読み込み中...</div>';
+  try {
+    const data = await callApi('api_listClassificationsAll');
+    APP._classifications = data;
+    renderClassificationRows();
+  } catch (e) {
+    box.innerHTML = '<div class="toast toast--error">読み込みエラー: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderClassificationRows() {
+  const box = document.getElementById('classificationList');
+  if (!box) return;
+  const data = APP._classifications || [];
+  const cats = Array.from(new Set(data.map(c => c.category).filter(Boolean)));
+  const catOptions = (selected) => {
+    const all = Array.from(new Set(cats.concat(['ブロック', '実践部会', '専門部会', '関連団体', '全体事業', 'その他'])));
+    return all.map(c => `<option value="${esc(c)}" ${c === selected ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  };
+  box.innerHTML = data.map((c, i) => `
+    <div class="sortlist__row" data-cls-id="${c.id}">
+      <div class="sortlist__handle">${i + 1}</div>
+      <div>
+        <select data-cls-field="category">
+          <option value="">--</option>
+          ${catOptions(c.category)}
+        </select>
+      </div>
+      <input type="text" data-cls-field="subcategory" value="${esc(c.subcategory)}" placeholder="サブ分類名">
+      <label class="check-label">
+        <input type="checkbox" data-cls-field="defaultAllowance" ${c.defaultAllowance ? 'checked' : ''}>
+        日当
+      </label>
+      <label class="check-label">
+        <input type="checkbox" data-cls-field="active" ${c.active ? 'checked' : ''}>
+        有効
+      </label>
+      <div class="sortlist__row-actions">
+        <button class="icon-btn" title="上へ" data-cls-up="${c.id}" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="icon-btn" title="下へ" data-cls-down="${c.id}" ${i === data.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="icon-btn" title="保存" data-cls-save="${c.id}">💾</button>
+        <button class="icon-btn icon-btn--danger" title="削除" data-cls-del="${c.id}">🗑</button>
+      </div>
+    </div>
+  `).join('') || '<div class="empty"><div class="empty__icon">🏷️</div>分類が登録されていません</div>';
+
+  box.querySelectorAll('[data-cls-up]').forEach(b => b.addEventListener('click', (e) => moveClassification(Number(e.currentTarget.dataset.clsUp), -1)));
+  box.querySelectorAll('[data-cls-down]').forEach(b => b.addEventListener('click', (e) => moveClassification(Number(e.currentTarget.dataset.clsDown), +1)));
+  box.querySelectorAll('[data-cls-save]').forEach(b => b.addEventListener('click', (e) => saveClassificationRow(Number(e.currentTarget.dataset.clsSave))));
+  box.querySelectorAll('[data-cls-del]').forEach(b => b.addEventListener('click', (e) => deleteClassificationRow(Number(e.currentTarget.dataset.clsDel))));
+}
+
+function readClassificationRow(id) {
+  const row = document.querySelector(`[data-cls-id="${id}"]`);
+  if (!row) return null;
+  const get = (f) => row.querySelector(`[data-cls-field="${f}"]`);
+  return {
+    id: id,
+    category: get('category').value,
+    subcategory: get('subcategory').value.trim(),
+    defaultAllowance: get('defaultAllowance').checked,
+    active: get('active').checked,
+    order: 0
+  };
+}
+
+async function saveClassificationRow(id) {
+  const payload = readClassificationRow(id);
+  if (!payload) return;
+  if (!payload.category) { toast('分類を選択してください', 'error'); return; }
+  showLoader(true);
+  try {
+    await callApi('api_updateClassification', payload);
+    toast('保存しました', 'success');
+    await loadClassificationsEditor();
+    APP.classifications = await callApi('api_listClassifications');
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function deleteClassificationRow(id) {
+  const data = APP._classifications || [];
+  const target = data.find(x => x.id === id);
+  if (!target) return;
+  if (!confirm(`分類「${target.category} / ${target.subcategory}」を削除します。よろしいですか？\n(既存イベントの分類値は変更されません)`)) return;
+  showLoader(true);
+  try {
+    await callApi('api_deleteClassification', id);
+    toast('削除しました', 'success');
+    await loadClassificationsEditor();
+    APP.classifications = await callApi('api_listClassifications');
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function addClassificationRow() {
+  showLoader(true);
+  try {
+    await callApi('api_addClassification', { category: 'その他', subcategory: '新規分類', defaultAllowance: false, active: true });
+    toast('分類を追加しました', 'success');
+    await loadClassificationsEditor();
+    APP.classifications = await callApi('api_listClassifications');
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function moveClassification(id, delta) {
+  const data = (APP._classifications || []).slice();
+  const idx = data.findIndex(x => x.id === id);
+  if (idx < 0) return;
+  const newIdx = idx + delta;
+  if (newIdx < 0 || newIdx >= data.length) return;
+  const tmp = data[idx]; data[idx] = data[newIdx]; data[newIdx] = tmp;
+  APP._classifications = data;
+  renderClassificationRows();
+  showLoader(true);
+  try {
+    await callApi('api_reorderClassifications', data.map(d => d.id));
+    APP.classifications = await callApi('api_listClassifications');
+  } catch (e) {
+    toast('並び替えエラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+// ----- ICS取込ルール編集 -----
+async function loadRulesEditor() {
+  const box = document.getElementById('rulesList');
+  if (!box) return;
+  box.innerHTML = '<div class="text-muted">読み込み中...</div>';
+  try {
+    const data = await callApi('api_listIcsRules');
+    APP._icsRules = data;
+    renderRuleRows();
+  } catch (e) {
+    box.innerHTML = '<div class="toast toast--error">読み込みエラー: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderRuleRows() {
+  const box = document.getElementById('rulesList');
+  if (!box) return;
+  const data = APP._icsRules || [];
+  document.getElementById('rulesCount').textContent = `${data.length}件`;
+  const cats = Array.from(new Set((APP._classifications || APP.classifications || []).map(c => c.category).filter(Boolean)));
+  const allCats = Array.from(new Set(cats.concat(['ブロック', '実践部会', '専門部会', '関連団体', '全体事業', 'その他'])));
+  box.innerHTML = data.map((r, i) => `
+    <div class="sortlist__row" data-rule-id="${r.id}">
+      <div class="sortlist__handle">${i + 1}</div>
+      <input type="text" data-rule-field="pattern" value="${esc(r.pattern)}" placeholder="例: 南千住">
+      <select data-rule-field="matchType">
+        <option value="contains" ${r.matchType === 'contains' ? 'selected' : ''}>含む</option>
+        <option value="regex" ${r.matchType === 'regex' ? 'selected' : ''}>正規表現</option>
+      </select>
+      <div style="display: flex; gap: 4px;">
+        <select data-rule-field="category" style="flex:1;">
+          ${allCats.map(c => `<option value="${esc(c)}" ${c === r.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+        </select>
+        <input type="text" data-rule-field="subcategory" value="${esc(r.subcategory)}" placeholder="サブ分類" style="flex:1.2;">
+      </div>
+      <label class="check-label">
+        <input type="checkbox" data-rule-field="defaultAllowance" ${r.defaultAllowance ? 'checked' : ''}>
+        日当
+      </label>
+      <label class="check-label">
+        <input type="checkbox" data-rule-field="active" ${r.active ? 'checked' : ''}>
+        有効
+      </label>
+      <div class="sortlist__row-actions">
+        <button class="icon-btn" title="上へ" data-rule-up="${r.id}" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="icon-btn" title="下へ" data-rule-down="${r.id}" ${i === data.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="icon-btn" title="保存" data-rule-save="${r.id}">💾</button>
+        <button class="icon-btn icon-btn--danger" title="削除" data-rule-del="${r.id}">🗑</button>
+      </div>
+    </div>
+  `).join('') || '<div class="empty"><div class="empty__icon">📥</div>ルールが登録されていません</div>';
+
+  box.querySelectorAll('[data-rule-up]').forEach(b => b.addEventListener('click', (e) => moveRule(Number(e.currentTarget.dataset.ruleUp), -1)));
+  box.querySelectorAll('[data-rule-down]').forEach(b => b.addEventListener('click', (e) => moveRule(Number(e.currentTarget.dataset.ruleDown), +1)));
+  box.querySelectorAll('[data-rule-save]').forEach(b => b.addEventListener('click', (e) => saveRuleRow(Number(e.currentTarget.dataset.ruleSave))));
+  box.querySelectorAll('[data-rule-del]').forEach(b => b.addEventListener('click', (e) => deleteRuleRow(Number(e.currentTarget.dataset.ruleDel))));
+}
+
+function readRuleRow(id) {
+  const row = document.querySelector(`[data-rule-id="${id}"]`);
+  if (!row) return null;
+  const get = (f) => row.querySelector(`[data-rule-field="${f}"]`);
+  return {
+    id: id,
+    pattern: get('pattern').value,
+    matchType: get('matchType').value,
+    category: get('category').value,
+    subcategory: get('subcategory').value,
+    defaultAllowance: get('defaultAllowance').checked,
+    active: get('active').checked,
+    order: 0
+  };
+}
+
+async function saveRuleRow(id) {
+  const payload = readRuleRow(id);
+  if (!payload) return;
+  if (!payload.pattern) { toast('パターン(キーワード)を入力してください', 'error'); return; }
+  if (!payload.category) { toast('分類を選択してください', 'error'); return; }
+  showLoader(true);
+  try {
+    await callApi('api_updateIcsRule', payload);
+    toast('保存しました', 'success');
+    await loadRulesEditor();
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function deleteRuleRow(id) {
+  const data = APP._icsRules || [];
+  const t = data.find(x => x.id === id);
+  if (!t) return;
+  if (!confirm(`ルール「${t.pattern}」を削除します。よろしいですか？`)) return;
+  showLoader(true);
+  try {
+    await callApi('api_deleteIcsRule', id);
+    toast('削除しました', 'success');
+    await loadRulesEditor();
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function addRuleRow() {
+  showLoader(true);
+  try {
+    await callApi('api_addIcsRule', { pattern: '', matchType: 'contains', category: 'その他', subcategory: 'その他', defaultAllowance: false, active: true });
+    toast('ルールを追加しました', 'success');
+    await loadRulesEditor();
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function moveRule(id, delta) {
+  const data = (APP._icsRules || []).slice();
+  const idx = data.findIndex(x => x.id === id);
+  if (idx < 0) return;
+  const newIdx = idx + delta;
+  if (newIdx < 0 || newIdx >= data.length) return;
+  const tmp = data[idx]; data[idx] = data[newIdx]; data[newIdx] = tmp;
+  APP._icsRules = data;
+  renderRuleRows();
+  showLoader(true);
+  try {
+    await callApi('api_reorderIcsRules', data.map(d => d.id));
+  } catch (e) {
+    toast('並び替えエラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function previewRuleClassification() {
+  const name = (document.getElementById('rulePreviewName').value || '').trim();
+  const out = document.getElementById('rulePreviewResult');
+  if (!name) { out.textContent = 'イベント名を入力'; out.className = 'pill pill--warn'; return; }
+  showLoader(true);
+  try {
+    const r = await callApi('api_previewIcsClassification', name);
+    out.textContent = `${r.category} / ${r.subcategory}` + (r.dailyAllowance ? '  💰日当対象' : '');
+    out.className = 'pill pill--ok';
+  } catch (e) {
+    out.textContent = 'エラー: ' + e.message;
+    out.className = 'pill pill--warn';
+  } finally {
+    showLoader(false);
+  }
 }
 
 // ==========================================================
