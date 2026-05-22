@@ -1,0 +1,18 @@
+{
+  "_comment": "このファイルは設定例です。実際の設定は config.json として保存されます。サーバ起動後 /setup から GUI で生成するのを推奨します。",
+  "spreadsheetId": "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
+  "icsImportUrl": "https://calendar.google.com/calendar/ical/.../basic.ics",
+  "port": 8080,
+  "googleCredentials": {
+    "type": "service_account",
+    "project_id": "your-project-id",
+    "private_key_id": "...",
+    "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
+    "client_email": "attendance-bot@your-project-id.iam.gserviceaccount.com",
+    "client_id": "...",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+    "client_x509_cert_url": "..."
+  }
+}

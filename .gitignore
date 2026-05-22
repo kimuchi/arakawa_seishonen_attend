@@ -1,1 +1,11 @@
 .clasp.json
+node_modules/
+npm-debug.log
+data/*
+!data/.gitkeep
+!data/config.example.json
+*.log
+.DS_Store
+.env
+secrets/
+*.local.json

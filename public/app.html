@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>荒川区青少年委員連絡会 出席簿</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-header__inner">
+      <div class="app-header__title">
+        <span class="app-header__badge">📋</span>
+        <div>
+          <div class="app-header__name">荒川区青少年委員連絡会 出席簿</div>
+          <div class="app-header__sub" id="fiscalYearLabel">2026年度</div>
+        </div>
+      </div>
+      <div class="app-header__meta">
+        <a href="#" id="openSheetBtn" class="pill pill--ghost" target="_blank">📄 シートを開く</a>
+        <a href="/setup" class="pill pill--ghost">🔧 設定</a>
+      </div>
+    </div>
+    <nav class="app-nav">
+      <button class="tab-btn is-active" data-tab="dashboard">ダッシュボード</button>
+      <button class="tab-btn" data-tab="attendance">出席登録</button>
+      <button class="tab-btn" data-tab="events">イベント管理</button>
+      <button class="tab-btn" data-tab="members">メンバ管理</button>
+      <button class="tab-btn" data-tab="summary">集計</button>
+      <button class="tab-btn" data-tab="settings">設定</button>
+    </nav>
+  </header>
+
+  <main class="app-main">
+    <div id="loader" class="loader is-active">
+      <div class="loader__spinner"></div>
+      <div class="loader__text">読み込み中...</div>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <section id="tab-dashboard" class="tab-panel is-active">
+      <div class="card">
+        <h2 class="card__title">ダッシュボード</h2>
+        <p class="text-muted">読み込み中...</p>
+      </div>
+    </section>
+    <section id="tab-attendance" class="tab-panel">
+      <div class="card">
+        <h2 class="card__title">出席登録</h2>
+        <p class="text-muted">読み込み中...</p>
+      </div>
+    </section>
+    <section id="tab-events" class="tab-panel">
+      <div class="card">
+        <h2 class="card__title">イベント管理</h2>
+        <p class="text-muted">読み込み中...</p>
+      </div>
+    </section>
+    <section id="tab-members" class="tab-panel">
+      <div class="card">
+        <h2 class="card__title">メンバ管理</h2>
+        <p class="text-muted">読み込み中...</p>
+      </div>
+    </section>
+    <section id="tab-summary" class="tab-panel">
+      <div class="card">
+        <h2 class="card__title">集計</h2>
+        <p class="text-muted">読み込み中...</p>
+      </div>
+    </section>
+    <section id="tab-settings" class="tab-panel">
+      <div class="card">
+        <h2 class="card__title">設定</h2>
+        <p class="text-muted">読み込み中...</p>
+      </div>
+    </section>
+  </main>
+
+  <div id="modal" class="modal" aria-hidden="true">
+    <div class="modal__backdrop" data-modal-close></div>
+    <div class="modal__content" role="dialog" aria-modal="true">
+      <div class="modal__header">
+        <h2 id="modalTitle" class="modal__title">タイトル</h2>
+        <button type="button" class="modal__close" data-modal-close aria-label="閉じる">×</button>
+      </div>
+      <div id="modalBody" class="modal__body"></div>
+      <div id="modalFooter" class="modal__footer"></div>
+    </div>
+  </div>
+
+  <script src="/scripts.js"></script>
+</body>
+</html>

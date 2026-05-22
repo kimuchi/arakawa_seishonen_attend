@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>セットアップ - 荒川区青少年委員連絡会 出席簿</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="setup-page">
+    <div class="setup-page__inner">
+      <div class="setup-hero">
+        <span class="setup-hero__badge">⚙️</span>
+        <div>
+          <div class="setup-hero__name">荒川区青少年委員連絡会 出席簿 セットアップ</div>
+          <div class="setup-hero__sub">初回起動時の設定。Google Sheets への接続情報と、ICS取込URL等をここで登録します。</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card__title">📋 現在の状態</h2>
+        <div id="statusBox" class="text-muted">確認中...</div>
+      </div>
+
+      <div class="card">
+        <div class="setup-step">
+          <span class="setup-step__num">1</span>
+          <h3 class="setup-step__title">Google サービスアカウントの認証情報</h3>
+        </div>
+        <div class="setup-help">
+          Google Cloud で作成したサービスアカウント JSON キーをそのまま貼り付けてください。<br>
+          まだ未作成の場合は、デプロイガイドの「サービスアカウントの作成」を参照してください。<br>
+          ※ 既に貼り付け済みの場合は、再入力しなければ既存の設定が維持されます。
+        </div>
+        <div class="form-row">
+          <div class="form-field" style="flex: 1 1 100%;">
+            <label class="form-field__label">サービスアカウント JSON</label>
+            <textarea id="credsJson" class="form-field__textarea" style="min-height: 160px; font-family: 'SF Mono', Consolas, monospace; font-size: 12px;" placeholder='{"type":"service_account","project_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\n..."...}'></textarea>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-field" style="flex: 1 1 100%;">
+            <label class="form-field__label">あるいは サービスアカウント JSON のファイルパス (サーバ側のローカルパス)</label>
+            <input type="text" id="credsPath" class="form-field__input" placeholder="例: /etc/secrets/service-account.json (Cloud Run の Secret Mount など)">
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="setup-step">
+          <span class="setup-step__num">2</span>
+          <h3 class="setup-step__title">スプレッドシートの指定</h3>
+        </div>
+        <div class="setup-help">
+          既存のスプレッドシートを使う場合は ID を入力してください (URL の <code>/d/【ここ】/edit</code> 部分)。<br>
+          新規に作成する場合は「新規スプレッドシートを作成」ボタンを押すと、サービスアカウントのドライブ上に作成されます。<br>
+          ※ 既存スプレッドシートを使う場合は、サービスアカウントのメールアドレスに「編集者」権限を付与してください。
+        </div>
+        <div class="form-row">
+          <div class="form-field" style="flex: 1 1 100%;">
+            <label class="form-field__label">スプレッドシートID</label>
+            <input type="text" id="spreadsheetId" class="form-field__input" placeholder="例: 1AbCdEfG...">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-field" style="flex: 1 1 100%;">
+            <label class="form-field__label">(新規作成する場合) タイトル</label>
+            <input type="text" id="spreadsheetTitle" class="form-field__input" value="2026年度荒川区青少年委員連絡会出席簿">
+          </div>
+          <div class="form-field" style="flex: 1 1 100%;">
+            <label class="form-field__label">(新規作成する場合) 共有先メールアドレス (任意・複数の場合はカンマ区切り)</label>
+            <input type="text" id="shareWith" class="form-field__input" placeholder="例: kimura@example.com">
+          </div>
+        </div>
+        <div class="btn-group">
+          <button class="btn" id="btnTest">🔍 接続テスト</button>
+          <button class="btn btn--ghost" id="btnCreate">📄 新規スプレッドシートを作成</button>
+        </div>
+        <div id="testResult" class="setup-status" style="display:none;"></div>
+      </div>
+
+      <div class="card">
+        <div class="setup-step">
+          <span class="setup-step__num">3</span>
+          <h3 class="setup-step__title">ICS取込URL (任意)</h3>
+        </div>
+        <div class="setup-help">
+          Googleカレンダーの「秘密アドレス(iCal)」やシステムから発行されるICSフィードのURLを入れると、イベント管理タブから1クリック取込ができます。<br>
+          未設定でもアプリは利用可能。あとから設定タブで変更できます。
+        </div>
+        <div class="form-row">
+          <div class="form-field" style="flex: 1 1 100%;">
+            <label class="form-field__label">ICS URL</label>
+            <input type="url" id="icsImportUrl" class="form-field__input" placeholder="https://calendar.google.com/calendar/ical/.../basic.ics">
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="setup-step">
+          <span class="setup-step__num">4</span>
+          <h3 class="setup-step__title">設定を保存</h3>
+        </div>
+        <div class="setup-help">
+          設定は <code id="configPathLabel"></code> に書き込まれます。<br>
+          保存と同時にスプレッドシートの初期化(シート構築 + 初期データ投入)を実行します。
+        </div>
+        <div class="btn-group">
+          <button class="btn btn--primary" id="btnSave">💾 設定を保存して初期化</button>
+        </div>
+        <div id="saveResult" class="setup-status" style="display:none;"></div>
+      </div>
+    </div>
+  </div>
+  <script src="/setup.js"></script>
+</body>
+</html>

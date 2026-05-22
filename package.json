@@ -1,0 +1,19 @@
+{
+  "name": "arakawa-seishonen-attend",
+  "version": "1.0.0",
+  "description": "荒川区青少年委員連絡会 出席簿 (Node.js / Cloud Run)",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "googleapis": "^144.0.0"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}

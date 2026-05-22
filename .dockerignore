@@ -1,0 +1,12 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.clasp.json
+.clasp.json.example
+legacy_gas
+data
+*.log
+.DS_Store
+.env
+README_GAS.md

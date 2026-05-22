@@ -1,0 +1,1614 @@
+/* ==========================================================
+ * 荒川区青少年委員連絡会 出席簿 - クライアントスクリプト
+ *   旧 GAS 版 scripts.html を Node/Express 版に移植。
+ *   既存ロジックを保ち、サーバとの通信のみ google.script.run → fetch に差し替え。
+ * ========================================================== */
+'use strict';
+
+// ---------- グローバル状態 ----------
+const APP = {
+  boot: {},
+  members: [],
+  events: [],
+  classifications: [],
+  settings: {},
+  currentTab: 'dashboard',
+  attendanceBuffer: { eventId: null, entries: {} },
+};
+
+// ---------- fetch ベースの API クライアント ----------
+async function httpJson(method, url, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const res = await fetch(url, opts);
+  let data;
+  try { data = await res.json(); } catch (e) { data = null; }
+  if (!res.ok) {
+    const msg = (data && (data.error || data.message)) || ('HTTP ' + res.status);
+    throw new Error(msg);
+  }
+  return data;
+}
+
+function qs(params) {
+  const sp = new URLSearchParams();
+  Object.keys(params || {}).forEach((k) => {
+    const v = params[k];
+    if (v === undefined || v === null || v === '') return;
+    sp.append(k, String(v));
+  });
+  const s = sp.toString();
+  return s ? '?' + s : '';
+}
+
+/**
+ * 旧 GAS の callApi('api_xxxx', ...) と互換のあるルーティング。
+ * 引数は旧版と同じ並びで受け、適切な REST 呼び出しを行う。
+ */
+async function callApi(fnName, ...args) {
+  let resp;
+  switch (fnName) {
+    case 'api_initializeSpreadsheet':
+      resp = await httpJson('POST', '/api/initialize-spreadsheet'); break;
+    case 'api_getSettings':
+      resp = await httpJson('GET', '/api/settings'); break;
+    case 'api_updateSetting': {
+      const [key, value] = args;
+      resp = await httpJson('POST', '/api/settings', { key, value }); break;
+    }
+    case 'api_listMembers':
+      resp = await httpJson('GET', '/api/members'); break;
+    case 'api_addMember':
+      resp = await httpJson('POST', '/api/members', args[0] || {}); break;
+    case 'api_updateMember':
+      resp = await httpJson('PUT', '/api/members/' + encodeURIComponent(args[0].id), args[0]); break;
+    case 'api_deleteMember':
+      resp = await httpJson('DELETE', '/api/members/' + encodeURIComponent(args[0])); break;
+    case 'api_listEvents':
+      resp = await httpJson('GET', '/api/events' + qs(args[0] || {})); break;
+    case 'api_addEvent':
+      resp = await httpJson('POST', '/api/events', args[0] || {}); break;
+    case 'api_updateEvent':
+      resp = await httpJson('PUT', '/api/events/' + encodeURIComponent(args[0].id), args[0]); break;
+    case 'api_deleteEvent':
+      resp = await httpJson('DELETE', '/api/events/' + encodeURIComponent(args[0])); break;
+    case 'api_listClassifications':
+      resp = await httpJson('GET', '/api/classifications'); break;
+    case 'api_listClassificationsAll':
+      resp = await httpJson('GET', '/api/classifications/all'); break;
+    case 'api_addClassification':
+      resp = await httpJson('POST', '/api/classifications', args[0] || {}); break;
+    case 'api_updateClassification':
+      resp = await httpJson('PUT', '/api/classifications/' + encodeURIComponent(args[0].id), args[0]); break;
+    case 'api_deleteClassification':
+      resp = await httpJson('DELETE', '/api/classifications/' + encodeURIComponent(args[0])); break;
+    case 'api_reorderClassifications':
+      resp = await httpJson('POST', '/api/classifications/reorder', { orderedIds: args[0] || [] }); break;
+    case 'api_listIcsRules':
+      resp = await httpJson('GET', '/api/ics-rules'); break;
+    case 'api_addIcsRule':
+      resp = await httpJson('POST', '/api/ics-rules', args[0] || {}); break;
+    case 'api_updateIcsRule':
+      resp = await httpJson('PUT', '/api/ics-rules/' + encodeURIComponent(args[0].id), args[0]); break;
+    case 'api_deleteIcsRule':
+      resp = await httpJson('DELETE', '/api/ics-rules/' + encodeURIComponent(args[0])); break;
+    case 'api_reorderIcsRules':
+      resp = await httpJson('POST', '/api/ics-rules/reorder', { orderedIds: args[0] || [] }); break;
+    case 'api_previewIcsClassification':
+      resp = await httpJson('POST', '/api/ics-rules/preview', { name: args[0] || '' }); break;
+    case 'api_getEventAttendance':
+      resp = await httpJson('GET', '/api/attendance/' + encodeURIComponent(args[0])); break;
+    case 'api_bulkSetAttendance':
+      resp = await httpJson('POST', '/api/attendance/' + encodeURIComponent(args[0]) + '/bulk', { entries: args[1] || [] }); break;
+    case 'api_summarizeByMember':
+      resp = await httpJson('POST', '/api/summary/by-member', args[0] || {}); break;
+    case 'api_summarizeByEvent':
+      resp = await httpJson('POST', '/api/summary/by-event', args[0] || {}); break;
+    case 'api_importFromConfiguredIcs':
+      resp = await httpJson('POST', '/api/ics-import', { startDate: args[0], endDate: args[1], options: args[2] || {} }); break;
+    case 'api_dedupExistingEvents':
+      resp = await httpJson('POST', '/api/dedup-events'); break;
+    default:
+      throw new Error('未対応のAPIコール: ' + fnName);
+  }
+  if (resp && resp.ok === false) throw new Error(resp.error || 'サーバエラー');
+  return resp && 'data' in resp ? resp.data : resp;
+}
+
+// ---------- トースト ----------
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast is-visible' + (type ? ' toast--' + type : '');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { el.className = 'toast'; }, 3000);
+}
+
+// ---------- ローダー ----------
+function showLoader(on) {
+  document.getElementById('loader').classList.toggle('is-active', !!on);
+}
+
+// ---------- HTMLエスケープ ----------
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// ---------- タブ ----------
+function initTabs() {
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      switchTab(tab);
+    });
+  });
+}
+function switchTab(tab) {
+  APP.currentTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.classList.toggle('is-active', b.dataset.tab === tab);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => {
+    p.classList.toggle('is-active', p.id === 'tab-' + tab);
+  });
+  if (tab === 'dashboard') renderDashboard();
+  if (tab === 'attendance') renderAttendanceTab();
+  if (tab === 'events') renderEventsTab();
+  if (tab === 'members') renderMembersTab();
+  if (tab === 'summary') renderSummaryTab();
+  if (tab === 'settings') renderSettingsTab();
+}
+
+// ---------- Modal ----------
+function openModal(title, bodyHtml, footerHtml) {
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('modalBody').innerHTML = bodyHtml || '';
+  document.getElementById('modalFooter').innerHTML = footerHtml || '';
+  document.getElementById('modal').classList.add('is-active');
+}
+function closeModal() {
+  document.getElementById('modal').classList.remove('is-active');
+}
+document.addEventListener('click', (e) => {
+  if (e.target.matches('[data-modal-close]')) closeModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeModal();
+});
+
+// ---------- 初期化(ブート) ----------
+async function bootstrap() {
+  showLoader(true);
+  try {
+    // /api/bootstrap で起動データを取得
+    let boot;
+    try {
+      const res = await fetch('/api/bootstrap');
+      boot = await res.json();
+    } catch (e) {
+      boot = { ok: false, error: e.message };
+    }
+    APP.boot = boot && boot.data ? { ok: !!boot.ok, ...boot.data } : { ok: !!(boot && boot.ok) };
+    // ヘッダ
+    const openBtn = document.getElementById('openSheetBtn');
+    if (APP.boot.spreadsheetUrl) openBtn.href = APP.boot.spreadsheetUrl;
+
+    if (!boot.ok) {
+      showInitializationScreen();
+      return;
+    }
+    APP.settings = APP.boot.settings || {};
+    updateFiscalYearLabel();
+    await reloadAll();
+    renderDashboard();
+  } catch (e) {
+    toast('初期化に失敗: ' + e.message, 'error');
+    showInitializationScreen();
+  } finally {
+    showLoader(false);
+  }
+}
+
+function updateFiscalYearLabel() {
+  const y = APP.settings['年度'] || '2026';
+  const label = y + '年度 (' + (APP.settings['年度開始日'] || '') + ' ～ ' + (APP.settings['年度終了日'] || '') + ')';
+  document.getElementById('fiscalYearLabel').textContent = label;
+}
+
+function showInitializationScreen() {
+  const panel = document.getElementById('tab-dashboard');
+  panel.innerHTML = `
+    <div class="card">
+      <h2 class="card__title">🚀 初回セットアップ</h2>
+      <p>スプレッドシートがまだ初期化されていません。下のボタンを押すと、メンバ一覧・イベントシート・出席シート・集計用の設定など必要なシートが自動で作成されます。</p>
+      <button id="btnInit" class="btn btn--primary">初期化する</button>
+    </div>
+  `;
+  document.getElementById('btnInit').addEventListener('click', async () => {
+    showLoader(true);
+    try {
+      const res = await callApi('api_initializeSpreadsheet');
+      toast('初期化が完了しました', 'success');
+      APP.boot.ok = true;
+      APP.boot.spreadsheetUrl = res.spreadsheetUrl;
+      document.getElementById('openSheetBtn').href = res.spreadsheetUrl;
+      await reloadAll();
+      renderDashboard();
+    } catch (e) {
+      toast('初期化エラー: ' + e.message, 'error');
+    } finally {
+      showLoader(false);
+    }
+  });
+}
+
+async function reloadAll() {
+  APP.members = await callApi('api_listMembers');
+  APP.events = await callApi('api_listEvents', {});
+  APP.classifications = await callApi('api_listClassifications');
+  const s = await callApi('api_getSettings');
+  APP.settings = s;
+  updateFiscalYearLabel();
+}
+
+// ==========================================================
+// ダッシュボード
+// ==========================================================
+async function renderDashboard() {
+  const panel = document.getElementById('tab-dashboard');
+  if (!APP.boot.ok) return;
+
+  const today = new Date().toISOString().slice(0,10);
+  const upcoming = APP.events.filter(e => e.date >= today).slice(0, 6);
+  const past = APP.events.filter(e => e.date < today).slice(-6).reverse();
+
+  const baseYear = Number(APP.settings['年度']) || 2026;
+  let summary;
+  try {
+    summary = await callApi('api_summarizeByMember', { period: 'twoFiscalYears', startFiscalYear: baseYear });
+  } catch (e) {
+    summary = null;
+  }
+
+  const totalEvents = summary ? summary.totalEvents : APP.events.length;
+  const totalAllowanceEvents = summary ? summary.totalAllowanceEvents : 0;
+  const totalAttendances = summary ? summary.members.reduce((a, m) => a + m.attendCount, 0) : 0;
+  const totalAllowance = summary ? summary.members.reduce((a, m) => a + m.allowanceAmount, 0) : 0;
+
+  panel.innerHTML = `
+    <div class="grid grid--4">
+      <div class="stat">
+        <div class="stat__label">登録イベント数</div>
+        <div class="stat__value">${totalEvents}</div>
+        <div class="stat__desc">うち日当対象 ${totalAllowanceEvents} 件 / 2年分</div>
+      </div>
+      <div class="stat">
+        <div class="stat__label">メンバ数</div>
+        <div class="stat__value">${APP.members.length}</div>
+        <div class="stat__desc">有効なメンバのみ</div>
+      </div>
+      <div class="stat">
+        <div class="stat__label">出席記録 合計</div>
+        <div class="stat__value">${totalAttendances}</div>
+        <div class="stat__desc">${baseYear}・${baseYear + 1}年度の延べ人数</div>
+      </div>
+      <div class="stat stat--hero">
+        <div class="stat__label">日当総額 (2年通算)</div>
+        <div class="stat__value stat__value--money stat__value--xl">${totalAllowance.toLocaleString()}</div>
+        <div class="stat__desc">@ ¥${APP.settings['日当単価'] || 500} / ${baseYear}・${baseYear + 1}年度</div>
+      </div>
+    </div>
+
+    <div class="grid grid--2">
+      <div class="card">
+        <h3 class="card__title">📅 これからのイベント</h3>
+        ${renderEventList_(upcoming, '予定されているイベントはありません。')}
+      </div>
+      <div class="card">
+        <h3 class="card__title">🕘 最近のイベント</h3>
+        ${renderEventList_(past, '最近のイベントはありません。')}
+      </div>
+    </div>
+  `;
+
+  panel.querySelectorAll('[data-go-attendance]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const eventId = Number(e.currentTarget.dataset.goAttendance);
+      openAttendanceForEvent(eventId);
+    });
+  });
+}
+function renderEventList_(events, emptyMsg) {
+  if (!events || events.length === 0) {
+    return `<div class="empty"><div class="empty__icon">📭</div>${emptyMsg}</div>`;
+  }
+  return events.map(ev => `
+    <div class="event-item">
+      <div class="event-item__date">${formatDateBadge_(ev.date)}</div>
+      <div class="event-item__body">
+        <div class="event-item__title">${esc(ev.title)}</div>
+        <div class="event-item__meta">
+          <span class="pill pill--muted">${esc(ev.category)}</span>
+          <span>${esc(ev.subcategory)}</span>
+          ${ev.dailyAllowance ? '<span class="pill pill--ok">日当対象</span>' : ''}
+          ${ev.allDay ? '<span class="pill">終日</span>' : (ev.startTime ? '<span>' + esc(ev.startTime) + '</span>' : '')}
+        </div>
+        ${ev.id ? `<div class="mt-2"><button class="btn btn--sm" data-go-attendance="${ev.id}">このイベントで出欠登録</button></div>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function openAttendanceForEvent(eventId) {
+  if (!eventId) return;
+  switchTab('attendance');
+  let retry = 0;
+  const maxRetry = 10;
+  const timer = setInterval(() => {
+    const select = document.getElementById('attEventSelect');
+    if (!select) {
+      retry++;
+      if (retry >= maxRetry) clearInterval(timer);
+      return;
+    }
+    select.value = String(eventId);
+    select.dispatchEvent(new Event('change'));
+    clearInterval(timer);
+  }, 50);
+}
+function formatDateBadge_(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return esc(dateStr);
+  const m = d.getMonth() + 1;
+  const day = d.getDate();
+  const weekdays = ['日','月','火','水','木','金','土'];
+  return `<div>${m}/${day}</div><div style="font-size:10px; opacity: 0.8;">(${weekdays[d.getDay()]})</div>`;
+}
+
+// ==========================================================
+// 出席登録タブ
+// ==========================================================
+async function renderAttendanceTab() {
+  const panel = document.getElementById('tab-attendance');
+  panel.innerHTML = `
+    <div class="card">
+      <h2 class="card__title">✅ 出席登録</h2>
+      <p class="card__subtitle">イベントを選び、〇/×を切り替えて保存します。地区・部会での絞り込みも可能です。</p>
+      <div class="form-row">
+        <div class="form-field" style="flex: 2 1 260px;">
+          <label class="form-field__label">イベント</label>
+          <select id="attEventSelect" class="form-field__select">
+            <option value="">-- イベントを選択 --</option>
+            ${APP.events.map(e => `<option value="${e.id}">${esc(e.date)} ${esc(e.title)} [${esc(e.category)}${e.subcategory ? ' / ' + esc(e.subcategory) : ''}]${e.dailyAllowance ? ' 💰' : ''}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div id="attendanceEditor" class="hidden"></div>
+    </div>
+  `;
+  document.getElementById('attEventSelect').addEventListener('change', onSelectAttendanceEvent);
+}
+
+async function onSelectAttendanceEvent(e) {
+  const eventId = Number(e.target.value);
+  const editor = document.getElementById('attendanceEditor');
+  if (!eventId) {
+    editor.classList.add('hidden');
+    editor.innerHTML = '';
+    return;
+  }
+  editor.classList.remove('hidden');
+  editor.innerHTML = '<div class="text-muted">読み込み中...</div>';
+  try {
+    const att = await callApi('api_getEventAttendance', eventId);
+    APP.attendanceBuffer.eventId = eventId;
+    APP.attendanceBuffer.entries = {};
+    APP.members.forEach(m => { APP.attendanceBuffer.entries[m.id] = att[m.id] || ''; });
+
+    const ev = APP.events.find(v => v.id === eventId);
+
+    editor.innerHTML = `
+      <div class="flex-between mb-4">
+        <div>
+          <div style="font-weight:600;">${esc(ev.title)}</div>
+          <div class="text-small text-muted">${esc(ev.date)} / ${esc(ev.category)} / ${esc(ev.subcategory)}${ev.dailyAllowance ? ' / <span class="pill pill--ok">日当対象</span>' : ''}</div>
+        </div>
+        <div class="btn-group">
+          <button class="btn btn--sm" id="attAllOn">全員出席</button>
+          <button class="btn btn--sm" id="attAllClear">全員クリア</button>
+          <button class="btn btn--primary" id="attSave">💾 保存</button>
+        </div>
+      </div>
+
+      <div class="filter-bar">
+        <label>地区
+          <select id="attFilterDistrict">
+            <option value="">すべて</option>
+            ${uniqueOf(APP.members, 'district').map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}
+          </select>
+        </label>
+        <label>実践部会
+          <select id="attFilterJissen">
+            <option value="">すべて</option>
+            ${uniqueOf(APP.members, 'jissen').map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}
+          </select>
+        </label>
+        <label>専門部会
+          <select id="attFilterSenmon">
+            <option value="">すべて</option>
+            ${uniqueOf(APP.members, 'senmon').map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}
+          </select>
+        </label>
+        <label>氏名検索
+          <input id="attFilterName" type="text" placeholder="部分一致">
+        </label>
+        <span id="attCount" class="pill pill--muted"></span>
+      </div>
+
+      <div class="tbl-wrap">
+        <table class="tbl tbl--compact">
+          <thead>
+            <tr>
+              <th class="center" style="width:40px;">No</th>
+              <th>地区</th>
+              <th>氏名</th>
+              <th>期</th>
+              <th>役職</th>
+              <th>実践</th>
+              <th>専門</th>
+              <th class="center">出席</th>
+              <th class="center">欠席</th>
+            </tr>
+          </thead>
+          <tbody id="attTbody"></tbody>
+        </table>
+      </div>
+    `;
+
+    ['attFilterDistrict', 'attFilterJissen', 'attFilterSenmon', 'attFilterName'].forEach(id => {
+      document.getElementById(id).addEventListener('change', renderAttendanceRows_);
+      document.getElementById(id).addEventListener('input', renderAttendanceRows_);
+    });
+    document.getElementById('attAllOn').addEventListener('click', () => {
+      const list = filteredMembers_();
+      list.forEach(m => APP.attendanceBuffer.entries[m.id] = '出席');
+      renderAttendanceRows_();
+    });
+    document.getElementById('attAllClear').addEventListener('click', () => {
+      const list = filteredMembers_();
+      list.forEach(m => APP.attendanceBuffer.entries[m.id] = '');
+      renderAttendanceRows_();
+    });
+    document.getElementById('attSave').addEventListener('click', saveAttendanceBuffer);
+    renderAttendanceRows_();
+  } catch (err) {
+    editor.innerHTML = '<div class="toast toast--error">読み込みエラー: ' + esc(err.message) + '</div>';
+  }
+}
+
+function uniqueOf(arr, key) {
+  return Array.from(new Set(arr.map(o => o[key]).filter(v => v && v !== '-'))).sort();
+}
+
+function filteredMembers_() {
+  const d = document.getElementById('attFilterDistrict').value;
+  const j = document.getElementById('attFilterJissen').value;
+  const s = document.getElementById('attFilterSenmon').value;
+  const n = (document.getElementById('attFilterName').value || '').trim();
+  return APP.members.filter(m => {
+    if (d && m.district !== d) return false;
+    if (j && m.jissen !== j) return false;
+    if (s && m.senmon !== s) return false;
+    if (n && m.name.indexOf(n) < 0) return false;
+    return true;
+  });
+}
+
+function renderAttendanceRows_() {
+  const list = filteredMembers_();
+  const tbody = document.getElementById('attTbody');
+  const attended = list.filter(m => APP.attendanceBuffer.entries[m.id] === '出席').length;
+  document.getElementById('attCount').textContent = `表示 ${list.length}名 / 出席 ${attended}名`;
+  tbody.innerHTML = list.map(m => {
+    const cur = APP.attendanceBuffer.entries[m.id] || '';
+    return `
+      <tr>
+        <td class="center">${m.no}</td>
+        <td>${esc(m.district)}</td>
+        <td><strong>${esc(m.name)}</strong></td>
+        <td>${esc(m.term)}</td>
+        <td>${esc(m.role)}</td>
+        <td>${esc(m.jissen)}</td>
+        <td>${esc(m.senmon)}</td>
+        <td class="center">
+          <button class="att-cell ${cur === '出席' ? 'is-attended' : ''}" data-member="${m.id}" data-status="出席">${cur === '出席' ? '〇' : ''}</button>
+        </td>
+        <td class="center">
+          <button class="att-cell ${cur === '欠席' ? 'is-absent' : ''}" data-member="${m.id}" data-status="欠席">${cur === '欠席' ? '×' : ''}</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+  tbody.querySelectorAll('.att-cell').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const mid = Number(e.currentTarget.dataset.member);
+      const st = e.currentTarget.dataset.status;
+      if (APP.attendanceBuffer.entries[mid] === st) {
+        APP.attendanceBuffer.entries[mid] = '';
+      } else {
+        APP.attendanceBuffer.entries[mid] = st;
+      }
+      renderAttendanceRows_();
+    });
+  });
+}
+
+async function saveAttendanceBuffer() {
+  const eventId = APP.attendanceBuffer.eventId;
+  if (!eventId) return;
+  const entries = Object.keys(APP.attendanceBuffer.entries).map(k => ({
+    memberId: Number(k),
+    status: APP.attendanceBuffer.entries[k]
+  }));
+  showLoader(true);
+  try {
+    const r = await callApi('api_bulkSetAttendance', eventId, entries);
+    toast(`保存しました (追加${r.added}/更新${r.updated}/削除${r.deleted})`, 'success');
+  } catch (e) {
+    toast('保存エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+// ==========================================================
+// イベント管理タブ
+// ==========================================================
+async function renderEventsTab() {
+  const panel = document.getElementById('tab-events');
+  panel.innerHTML = `
+    <div class="card">
+      <h2 class="card__title">📅 イベント管理</h2>
+      <p class="card__subtitle">イベントの追加・編集・削除。設定で登録した ICS URL から一括取込ができます。</p>
+      <div class="btn-group mb-4">
+        <button class="btn btn--primary" id="btnAddEvent">+ 新規イベント</button>
+        <button class="btn" id="btnImportIcs1y">🔄 ICSを1年分取込</button>
+        <button class="btn btn--ghost" id="btnImportIcs2y">📥 ICSを2年分取込</button>
+        <button class="btn btn--danger" id="btnDedupEvents">🧹 重複イベントを掃除</button>
+      </div>
+
+      <div class="filter-bar">
+        <label>分類
+          <select id="evFilterCategory">
+            <option value="">すべて</option>
+            ${Array.from(new Set(APP.classifications.map(c => c.category))).map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+          </select>
+        </label>
+        <label>日当対象のみ
+          <input id="evFilterAllowance" type="checkbox">
+        </label>
+        <label>キーワード
+          <input id="evFilterTitle" type="text" placeholder="イベント名">
+        </label>
+        <span id="evFilterCount" class="pill pill--muted"></span>
+      </div>
+
+      <div id="eventsList"></div>
+    </div>
+  `;
+  document.getElementById('btnAddEvent').addEventListener('click', () => openEventModal());
+  document.getElementById('btnImportIcs1y').addEventListener('click', () => runConfiguredIcsImport(1));
+  document.getElementById('btnImportIcs2y').addEventListener('click', () => runConfiguredIcsImport(2));
+  document.getElementById('btnDedupEvents').addEventListener('click', runDedupEvents);
+  ['evFilterCategory', 'evFilterAllowance', 'evFilterTitle'].forEach(id => {
+    const el = document.getElementById(id);
+    el.addEventListener('change', renderEventRows_);
+    el.addEventListener('input', renderEventRows_);
+  });
+  renderEventRows_();
+}
+
+function renderEventRows_() {
+  const cat = document.getElementById('evFilterCategory').value;
+  const allowance = document.getElementById('evFilterAllowance').checked;
+  const kw = (document.getElementById('evFilterTitle').value || '').trim();
+  const list = APP.events.filter(e => {
+    if (cat && e.category !== cat) return false;
+    if (allowance && !e.dailyAllowance) return false;
+    if (kw && e.title.indexOf(kw) < 0) return false;
+    return true;
+  });
+  document.getElementById('evFilterCount').textContent = `${list.length}件`;
+  const box = document.getElementById('eventsList');
+  if (list.length === 0) {
+    box.innerHTML = `<div class="empty"><div class="empty__icon">📭</div>イベントがありません</div>`;
+    return;
+  }
+  box.innerHTML = list.map(ev => `
+    <div class="event-item">
+      <div class="event-item__date">${formatDateBadge_(ev.date)}</div>
+      <div class="event-item__body">
+        <div class="event-item__title">${esc(ev.title)}</div>
+        <div class="event-item__meta">
+          <span class="pill pill--muted">${esc(ev.category)}</span>
+          <span>${esc(ev.subcategory)}</span>
+          ${ev.dailyAllowance ? '<span class="pill pill--ok">日当対象</span>' : ''}
+          ${ev.allDay ? '<span class="pill">終日</span>' : (ev.startTime ? '<span>' + esc(ev.startTime) + (ev.endTime ? '-' + esc(ev.endTime) : '') + '</span>' : '')}
+          ${ev.location ? '<span>📍 ' + esc(ev.location) + '</span>' : ''}
+        </div>
+      </div>
+      <div class="event-item__actions">
+        <button class="btn btn--sm" data-att="${ev.id}">出欠登録</button>
+        <button class="btn btn--sm" data-edit="${ev.id}">編集</button>
+        <button class="btn btn--sm btn--danger" data-del="${ev.id}">削除</button>
+      </div>
+    </div>
+  `).join('');
+  box.querySelectorAll('[data-att]').forEach(b => {
+    b.addEventListener('click', (e) => {
+      const id = Number(e.currentTarget.dataset.att);
+      openAttendanceForEvent(id);
+    });
+  });
+  box.querySelectorAll('[data-edit]').forEach(b => {
+    b.addEventListener('click', (e) => {
+      const id = Number(e.currentTarget.dataset.edit);
+      const ev = APP.events.find(x => x.id === id);
+      openEventModal(ev);
+    });
+  });
+  box.querySelectorAll('[data-del]').forEach(b => {
+    b.addEventListener('click', async (e) => {
+      const id = Number(e.currentTarget.dataset.del);
+      const ev = APP.events.find(x => x.id === id);
+      if (!confirm(`イベント「${ev.title}」を削除します。関連する出席データも削除されます。よろしいですか？`)) return;
+      showLoader(true);
+      try {
+        await callApi('api_deleteEvent', id);
+        toast('削除しました', 'success');
+        APP.events = await callApi('api_listEvents', {});
+        renderEventRows_();
+      } catch (err) {
+        toast('エラー: ' + err.message, 'error');
+      } finally {
+        showLoader(false);
+      }
+    });
+  });
+}
+
+function openEventModal(ev) {
+  const isEdit = !!ev;
+  ev = ev || { id: '', date: '', startTime: '', endTime: '', allDay: false, title: '', category: '', subcategory: '', dailyAllowance: false, location: '', note: '' };
+  const categories = Array.from(new Set(APP.classifications.map(c => c.category)));
+  const body = `
+    <div class="form-row">
+      <div class="form-field">
+        <label class="form-field__label">日付 *</label>
+        <input type="date" id="evDate" class="form-field__input" value="${esc(ev.date)}">
+      </div>
+      <div class="form-field">
+        <label class="form-field__label">開始時刻</label>
+        <input type="time" id="evStart" class="form-field__input" value="${esc(ev.startTime)}">
+      </div>
+      <div class="form-field">
+        <label class="form-field__label">終了時刻</label>
+        <input type="time" id="evEnd" class="form-field__input" value="${esc(ev.endTime)}">
+      </div>
+      <div class="form-field form-field--check">
+        <input type="checkbox" id="evAllDay" ${ev.allDay ? 'checked' : ''}>
+        <label for="evAllDay">終日</label>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-field" style="flex: 2 1 100%;">
+        <label class="form-field__label">イベント名 *</label>
+        <input type="text" id="evTitle" class="form-field__input" value="${esc(ev.title)}">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-field">
+        <label class="form-field__label">分類 *</label>
+        <select id="evCategory" class="form-field__select">
+          ${categories.map(c => `<option value="${esc(c)}" ${c === ev.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-field">
+        <label class="form-field__label">サブ分類</label>
+        <select id="evSubcategory" class="form-field__select"></select>
+      </div>
+      <div class="form-field form-field--check">
+        <input type="checkbox" id="evAllowance" ${ev.dailyAllowance ? 'checked' : ''}>
+        <label for="evAllowance">日当対象</label>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-field" style="flex: 1 1 100%;">
+        <label class="form-field__label">場所</label>
+        <input type="text" id="evLocation" class="form-field__input" value="${esc(ev.location)}">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-field" style="flex: 1 1 100%;">
+        <label class="form-field__label">備考</label>
+        <textarea id="evNote" class="form-field__textarea">${esc(ev.note)}</textarea>
+      </div>
+    </div>
+  `;
+  const footer = `
+    <button class="btn" data-modal-close>キャンセル</button>
+    <button class="btn btn--primary" id="btnSaveEvent">${isEdit ? '更新' : '追加'}</button>
+  `;
+  openModal(isEdit ? 'イベント編集' : 'イベント追加', body, footer);
+  const catSel = document.getElementById('evCategory');
+  const subSel = document.getElementById('evSubcategory');
+  function refreshSub() {
+    const c = catSel.value;
+    const subs = APP.classifications.filter(x => x.category === c);
+    subSel.innerHTML = '<option value="">-- 指定なし --</option>' + subs.map(s => `<option value="${esc(s.subcategory)}" ${s.subcategory === ev.subcategory ? 'selected' : ''}>${esc(s.subcategory)}</option>`).join('');
+    if (!isEdit) {
+      const first = subs[0];
+      if (first) document.getElementById('evAllowance').checked = !!first.defaultAllowance;
+    }
+  }
+  catSel.addEventListener('change', refreshSub);
+  refreshSub();
+
+  document.getElementById('btnSaveEvent').addEventListener('click', async () => {
+    const payload = {
+      id: ev.id || undefined,
+      date: document.getElementById('evDate').value,
+      startTime: document.getElementById('evStart').value,
+      endTime: document.getElementById('evEnd').value,
+      allDay: document.getElementById('evAllDay').checked,
+      title: document.getElementById('evTitle').value.trim(),
+      category: document.getElementById('evCategory').value,
+      subcategory: document.getElementById('evSubcategory').value,
+      dailyAllowance: document.getElementById('evAllowance').checked,
+      location: document.getElementById('evLocation').value,
+      note: document.getElementById('evNote').value
+    };
+    if (!payload.date || !payload.title) { toast('日付とイベント名は必須です', 'error'); return; }
+    showLoader(true);
+    try {
+      if (isEdit) {
+        await callApi('api_updateEvent', payload);
+      } else {
+        await callApi('api_addEvent', payload);
+      }
+      toast('保存しました', 'success');
+      closeModal();
+      APP.events = await callApi('api_listEvents', {});
+      renderEventRows_();
+    } catch (err) {
+      toast('保存エラー: ' + err.message, 'error');
+    } finally {
+      showLoader(false);
+    }
+  });
+}
+
+async function runDedupEvents() {
+  if (!confirm('「日付 + イベント名」または「GイベントID」が同じイベントを 1 件残して削除します。\n対象に紐づく出席行も削除されます。実行しますか？')) return;
+  showLoader(true);
+  try {
+    const r = await callApi('api_dedupExistingEvents');
+    toast(`重複を削除しました: ${r.removed}件削除 / ${r.kept}件保持`, 'success');
+    APP.events = await callApi('api_listEvents', {});
+    renderEventRows_();
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function runConfiguredIcsImport(spanYears) {
+  const baseStart = APP.settings['年度開始日'] || '2026-04-01';
+  const baseEnd = APP.settings['年度終了日'] || '2027-03-31';
+  const span = (spanYears === 2) ? 2 : 1;
+  let from = baseStart;
+  let to = baseEnd;
+  if (span === 2) {
+    const endDate = new Date(baseEnd);
+    if (!isNaN(endDate.getTime())) {
+      endDate.setFullYear(endDate.getFullYear() + 1);
+      const y = endDate.getFullYear();
+      const m = String(endDate.getMonth() + 1).padStart(2, '0');
+      const d = String(endDate.getDate()).padStart(2, '0');
+      to = `${y}-${m}-${d}`;
+    }
+  }
+  const label = span === 2 ? '2年分' : '1年分';
+  if (!confirm(`設定の ICS取込URL から${label}取り込みます。\n対象期間: ${from} ～ ${to}\n実行しますか？`)) return;
+  showLoader(true);
+  try {
+    const r = await callApi('api_importFromConfiguredIcs', from, to, { autoClassify: true });
+    toast(`取込: ${r.imported}件 / スキップ: ${r.skipped}件`, 'success');
+    APP.events = await callApi('api_listEvents', {});
+    renderEventRows_();
+  } catch (e) {
+    toast('取込エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+// ==========================================================
+// メンバ管理タブ
+// ==========================================================
+function renderMembersTab() {
+  const panel = document.getElementById('tab-members');
+  panel.innerHTML = `
+    <div class="card">
+      <h2 class="card__title">👥 メンバ管理</h2>
+      <p class="card__subtitle">メンバの追加・編集・削除。年度途中の増減にも対応します。</p>
+      <div class="btn-group mb-4">
+        <button class="btn btn--primary" id="btnAddMember">+ 新規メンバ</button>
+      </div>
+      <div class="tbl-wrap">
+        <table class="tbl tbl--compact">
+          <thead>
+            <tr>
+              <th>No</th><th>地区</th><th>氏名</th><th>期</th><th>役職</th><th>実践部会</th><th>専門部会</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="memTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  `;
+  document.getElementById('btnAddMember').addEventListener('click', () => openMemberModal());
+  renderMemberRows_();
+}
+
+function renderMemberRows_() {
+  const tbody = document.getElementById('memTbody');
+  tbody.innerHTML = APP.members.map(m => `
+    <tr>
+      <td>${m.no || ''}</td>
+      <td>${esc(m.district)}</td>
+      <td><strong>${esc(m.name)}</strong></td>
+      <td>${esc(m.term)}</td>
+      <td>${esc(m.role)}</td>
+      <td>${esc(m.jissen)}</td>
+      <td>${esc(m.senmon)}</td>
+      <td>
+        <button class="btn btn--sm" data-mem-edit="${m.id}">編集</button>
+        <button class="btn btn--sm btn--danger" data-mem-del="${m.id}">削除</button>
+      </td>
+    </tr>
+  `).join('');
+  tbody.querySelectorAll('[data-mem-edit]').forEach(b => {
+    b.addEventListener('click', (e) => {
+      const id = Number(e.currentTarget.dataset.memEdit);
+      const m = APP.members.find(x => x.id === id);
+      openMemberModal(m);
+    });
+  });
+  tbody.querySelectorAll('[data-mem-del]').forEach(b => {
+    b.addEventListener('click', async (e) => {
+      const id = Number(e.currentTarget.dataset.memDel);
+      const m = APP.members.find(x => x.id === id);
+      if (!confirm(`「${m.name}」を削除します。関連する出席記録も削除されます。よろしいですか？`)) return;
+      showLoader(true);
+      try {
+        await callApi('api_deleteMember', id);
+        toast('削除しました', 'success');
+        APP.members = await callApi('api_listMembers');
+        renderMemberRows_();
+      } catch (err) {
+        toast('エラー: ' + err.message, 'error');
+      } finally {
+        showLoader(false);
+      }
+    });
+  });
+}
+
+function openMemberModal(m) {
+  const isEdit = !!m;
+  m = m || { id: '', no: '', district: '', name: '', term: '', role: '', jissen: '-', senmon: '-', note: '' };
+  const districts = ['南千住','荒川・町屋','尾久','日暮里'];
+  const jissen = ['校庭','少年','青年','-'];
+  const senmon = ['総務','調査研修','広報','-'];
+  const body = `
+    <div class="form-row">
+      <div class="form-field">
+        <label class="form-field__label">No</label>
+        <input type="number" id="mNo" class="form-field__input" value="${esc(m.no)}">
+      </div>
+      <div class="form-field">
+        <label class="form-field__label">地区 *</label>
+        <select id="mDistrict" class="form-field__select">
+          ${districts.map(d => `<option value="${esc(d)}" ${d === m.district ? 'selected' : ''}>${esc(d)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-field">
+        <label class="form-field__label">期</label>
+        <input type="text" id="mTerm" class="form-field__input" value="${esc(m.term)}">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-field" style="flex: 2 1 200px;">
+        <label class="form-field__label">氏名 *</label>
+        <input type="text" id="mName" class="form-field__input" value="${esc(m.name)}">
+      </div>
+      <div class="form-field" style="flex: 2 1 200px;">
+        <label class="form-field__label">役職</label>
+        <input type="text" id="mRole" class="form-field__input" value="${esc(m.role)}">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-field">
+        <label class="form-field__label">実践部会</label>
+        <select id="mJissen" class="form-field__select">
+          ${jissen.map(d => `<option value="${esc(d)}" ${d === m.jissen ? 'selected' : ''}>${esc(d)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-field">
+        <label class="form-field__label">専門部会</label>
+        <select id="mSenmon" class="form-field__select">
+          ${senmon.map(d => `<option value="${esc(d)}" ${d === m.senmon ? 'selected' : ''}>${esc(d)}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-field" style="flex: 1 1 100%;">
+        <label class="form-field__label">備考</label>
+        <textarea id="mNote" class="form-field__textarea">${esc(m.note)}</textarea>
+      </div>
+    </div>
+  `;
+  const footer = `
+    <button class="btn" data-modal-close>キャンセル</button>
+    <button class="btn btn--primary" id="btnSaveMember">${isEdit ? '更新' : '追加'}</button>
+  `;
+  openModal(isEdit ? 'メンバ編集' : 'メンバ追加', body, footer);
+  document.getElementById('btnSaveMember').addEventListener('click', async () => {
+    const payload = {
+      id: m.id || undefined,
+      no: Number(document.getElementById('mNo').value) || '',
+      district: document.getElementById('mDistrict').value,
+      name: document.getElementById('mName').value.trim(),
+      term: document.getElementById('mTerm').value.trim(),
+      role: document.getElementById('mRole').value.trim(),
+      jissen: document.getElementById('mJissen').value,
+      senmon: document.getElementById('mSenmon').value,
+      note: document.getElementById('mNote').value
+    };
+    if (!payload.district || !payload.name) { toast('地区と氏名は必須です', 'error'); return; }
+    showLoader(true);
+    try {
+      if (isEdit) await callApi('api_updateMember', payload);
+      else await callApi('api_addMember', payload);
+      toast('保存しました', 'success');
+      closeModal();
+      APP.members = await callApi('api_listMembers');
+      renderMemberRows_();
+    } catch (err) {
+      toast('エラー: ' + err.message, 'error');
+    } finally {
+      showLoader(false);
+    }
+  });
+}
+
+// ==========================================================
+// 集計タブ
+// ==========================================================
+async function renderSummaryTab() {
+  const panel = document.getElementById('tab-summary');
+  const baseYear = Number(APP.settings['年度']) || 2026;
+  panel.innerHTML = `
+    <div class="card">
+      <h2 class="card__title">📈 集計</h2>
+      <p class="card__subtitle">人別の出席数・日当額を確認できます。年度・上下半期・四半期(2年分=8四半期)・任意期間に対応。</p>
+      <div class="filter-bar">
+        <label>期間
+          <select id="sumPeriod">
+            <option value="twoFiscalYears">2年度通算 (${baseYear}・${baseYear + 1}年度)</option>
+            <option value="fiscalCurrent">設定年度 (${baseYear}年度)</option>
+            <option value="fiscalNext">次年度 (${baseYear + 1}年度)</option>
+            <option value="y1h1">1年目 上半期 (${baseYear}年度 4-9月)</option>
+            <option value="y1h2">1年目 下半期 (${baseYear}年度 10月-翌3月)</option>
+            <option value="y2h1">2年目 上半期 (${baseYear + 1}年度 4-9月)</option>
+            <option value="y2h2">2年目 下半期 (${baseYear + 1}年度 10月-翌3月)</option>
+            <option value="custom">カスタム</option>
+          </select>
+        </label>
+        <label id="sumFromWrap" class="hidden">開始
+          <input type="date" id="sumFrom">
+        </label>
+        <label id="sumToWrap" class="hidden">終了
+          <input type="date" id="sumTo">
+        </label>
+        <button class="btn btn--primary btn--sm" id="btnRunSummary">集計実行</button>
+        <button class="btn btn--sm" id="btnCsvSummary">CSVダウンロード</button>
+      </div>
+      <div id="summaryResult"></div>
+    </div>
+  `;
+  document.getElementById('sumPeriod').addEventListener('change', (e) => {
+    const v = e.target.value;
+    document.getElementById('sumFromWrap').classList.toggle('hidden', v !== 'custom');
+    document.getElementById('sumToWrap').classList.toggle('hidden', v !== 'custom');
+  });
+  document.getElementById('btnRunSummary').addEventListener('click', runSummary);
+  document.getElementById('btnCsvSummary').addEventListener('click', downloadSummaryCsv);
+  runSummary();
+}
+
+async function runSummary() {
+  const period = document.getElementById('sumPeriod').value;
+  const from = document.getElementById('sumFrom').value;
+  const to = document.getElementById('sumTo').value;
+  const baseYear = Number(APP.settings['年度']) || 2026;
+  let query = { period: period, dateFrom: from, dateTo: to };
+  if (period === 'fiscalCurrent') query = { period: 'fiscalYear', fiscalYear: baseYear };
+  if (period === 'fiscalNext') query = { period: 'fiscalYear', fiscalYear: baseYear + 1 };
+  if (period === 'twoFiscalYears') query = { period: 'twoFiscalYears', startFiscalYear: baseYear };
+  if (period === 'y1h1') query = { period: 'fiscalYearHalf', fiscalYear: baseYear, half: 'h1' };
+  if (period === 'y1h2') query = { period: 'fiscalYearHalf', fiscalYear: baseYear, half: 'h2' };
+  if (period === 'y2h1') query = { period: 'fiscalYearHalf', fiscalYear: baseYear + 1, half: 'h1' };
+  if (period === 'y2h2') query = { period: 'fiscalYearHalf', fiscalYear: baseYear + 1, half: 'h2' };
+  showLoader(true);
+  try {
+    const res = await callApi('api_summarizeByMember', query);
+    APP._lastSummary = res;
+    const box = document.getElementById('summaryResult');
+    const ms = res.members;
+    const ds = res.districts || [];
+    const total = ms.reduce((a, m) => a + m.allowanceAmount, 0);
+    box.innerHTML = `
+      <div class="grid grid--3 mb-4">
+        <div class="stat"><div class="stat__label">対象期間</div><div class="stat__value" style="font-size:14px;">${esc(res.range.label)}</div></div>
+        <div class="stat"><div class="stat__label">対象イベント</div><div class="stat__value">${res.totalEvents}件</div><div class="stat__desc">うち日当対象 ${res.totalAllowanceEvents}件</div></div>
+        <div class="stat"><div class="stat__label">日当総額</div><div class="stat__value stat__value--money">${total.toLocaleString()}</div><div class="stat__desc">@¥${res.dailyAllowance}</div></div>
+      </div>
+      <div class="tbl-wrap">
+        <table class="tbl tbl--compact">
+          <thead>
+            <tr>
+              <th>No</th><th>地区</th><th>氏名</th><th>期</th><th>役職</th><th>実践</th><th>専門</th>
+              <th class="num">出席回数</th>
+              <th class="num">日当対象出席</th>
+              <th class="num">金額</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${ms.map(m => `
+              <tr>
+                <td>${m.no || ''}</td>
+                <td>${esc(m.district)}</td>
+                <td><strong>${esc(m.name)}</strong></td>
+                <td>${esc(m.term)}</td>
+                <td>${esc(m.role)}</td>
+                <td>${esc(m.jissen)}</td>
+                <td>${esc(m.senmon)}</td>
+                <td class="num">${m.attendCount}</td>
+                <td class="num">${m.allowanceCount}</td>
+                <td class="num">¥${m.allowanceAmount.toLocaleString()}</td>
+              </tr>
+            `).join('')}
+            <tr style="background:#eff6ff; font-weight:700;">
+              <td colspan="7" class="num">合計</td>
+              <td class="num">${ms.reduce((a,m)=>a+m.attendCount,0)}</td>
+              <td class="num">${ms.reduce((a,m)=>a+m.allowanceCount,0)}</td>
+              <td class="num">¥${total.toLocaleString()}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card mt-4 card--accent">
+        <h3 class="card__title">🏷️ ブロック別（日当）合計</h3>
+        <div class="block-grid">
+          ${ds.map((d, idx) => `
+            <div class="block-card block-card--c${idx % 5}">
+              <div class="block-card__name">${esc(d.district)}</div>
+              <div class="block-card__amount">¥${d.allowanceAmount.toLocaleString()}</div>
+              <div class="block-card__sub">
+                <span>出席 ${d.attendCount}回</span>
+                <span>日当対象 ${d.allowanceCount}回</span>
+              </div>
+            </div>
+          `).join('')}
+          <div class="block-card block-card--total">
+            <div class="block-card__name">全ブロック合計</div>
+            <div class="block-card__amount">¥${ds.reduce((a,d)=>a+d.allowanceAmount,0).toLocaleString()}</div>
+            <div class="block-card__sub">
+              <span>出席 ${ds.reduce((a,d)=>a+d.attendCount,0)}回</span>
+              <span>日当対象 ${ds.reduce((a,d)=>a+d.allowanceCount,0)}回</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    toast('集計エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+function downloadSummaryCsv() {
+  const res = APP._lastSummary;
+  if (!res) { toast('先に集計を実行してください'); return; }
+  const headers = ['No','地区','氏名','期','役職','実践','専門','出席回数','日当対象出席','金額'];
+  const rows = res.members.map(m => [m.no || '', m.district, m.name, m.term, m.role, m.jissen, m.senmon, m.attendCount, m.allowanceCount, m.allowanceAmount]);
+  const total = res.members.reduce((a,m)=>a+m.allowanceAmount,0);
+  rows.push(['合計','','','','','','',res.members.reduce((a,m)=>a+m.attendCount,0), res.members.reduce((a,m)=>a+m.allowanceCount,0), total]);
+  rows.push([]);
+  rows.push(['ブロック別合計']);
+  rows.push(['ブロック','出席回数','日当対象出席','金額']);
+  (res.districts || []).forEach(d => {
+    rows.push([d.district, d.attendCount, d.allowanceCount, d.allowanceAmount]);
+  });
+  rows.push(['合計', (res.districts || []).reduce((a,d)=>a+d.attendCount,0), (res.districts || []).reduce((a,d)=>a+d.allowanceCount,0), (res.districts || []).reduce((a,d)=>a+d.allowanceAmount,0)]);
+  const csv = [headers].concat(rows).map(r => r.map(v => {
+    const s = String(v == null ? '' : v);
+    return /[,"\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+  }).join(',')).join('\n');
+  const bom = '\uFEFF';
+  const blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `出席集計_${res.range.from}_${res.range.to}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ==========================================================
+// 設定タブ
+// ==========================================================
+async function renderSettingsTab() {
+  const panel = document.getElementById('tab-settings');
+  const entries = Object.keys(APP.settings || {}).map(k => ({ key: k, value: APP.settings[k] }));
+  panel.innerHTML = `
+    <div class="card">
+      <h2 class="card__title">⚙️ 設定</h2>
+      <p class="card__subtitle">年度や日当単価など。変更後は画面を再読み込みするとヘッダにも反映されます。</p>
+      <div class="tbl-wrap" style="max-height: none;">
+        <table class="tbl tbl--compact">
+          <thead><tr><th>キー</th><th>値</th><th>操作</th></tr></thead>
+          <tbody id="setTbody">
+            ${entries.map(e => `
+              <tr>
+                <td><strong>${esc(e.key)}</strong></td>
+                <td><input type="text" class="form-field__input" data-key="${esc(e.key)}" value="${esc(e.value)}"></td>
+                <td><button class="btn btn--sm btn--primary" data-set-save="${esc(e.key)}">保存</button></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 class="card__title">🏷️ 分類マスタ</h2>
+      <p class="card__subtitle">分類(大区分)とサブ分類の組み合わせ、日当対象デフォルト、表示順、有効/無効を管理します。表示順は ↑↓ で簡単に入れ替え可能。</p>
+      <div class="btn-group mb-4">
+        <button class="btn btn--primary btn--sm" id="btnAddClassification">+ 分類を追加</button>
+        <button class="btn btn--sm" id="btnReloadClassifications">🔄 再読込</button>
+      </div>
+      <div class="sortlist">
+        <div class="sortlist__row sortlist__row--header">
+          <div class="sortlist__handle">#</div>
+          <div>分類</div>
+          <div>サブ分類</div>
+          <div>日当デフォルト</div>
+          <div>有効</div>
+          <div>操作</div>
+        </div>
+        <div id="classificationList"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 class="card__title">📥 ICS取込ルール</h2>
+      <p class="card__subtitle">ICS取込時にイベント名と照合するキーワードを登録します。上から順に評価され、最初に当たったルールが使われます。「南千住→ブロック/南千住」「アリストック→関連団体/荒小連」のような独自ルールも追加できます。</p>
+      <div class="btn-group mb-4">
+        <button class="btn btn--primary btn--sm" id="btnAddRule">+ ルールを追加</button>
+        <button class="btn btn--sm" id="btnReloadRules">🔄 再読込</button>
+        <span class="pill pill--muted" id="rulesCount"></span>
+      </div>
+      <div class="filter-bar mb-4">
+        <label>イベント名でテスト
+          <input type="text" id="rulePreviewName" placeholder="例: 南千住ブロック会議" style="min-width: 240px;">
+        </label>
+        <button class="btn btn--sm" id="btnPreviewRule">テスト分類</button>
+        <span id="rulePreviewResult" class="pill pill--muted">テスト未実行</span>
+      </div>
+      <div class="sortlist sortlist--rules">
+        <div class="sortlist__row sortlist__row--header">
+          <div class="sortlist__handle">#</div>
+          <div>パターン</div>
+          <div>マッチ</div>
+          <div>分類 / サブ分類</div>
+          <div>日当デフォルト</div>
+          <div>有効</div>
+          <div>操作</div>
+        </div>
+        <div id="rulesList"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="card__title">🔧 管理</h3>
+      <div class="btn-group">
+        <button class="btn" id="btnOpenSheetFromSettings">📄 スプレッドシートを開く</button>
+        <button class="btn" id="btnReloadAll">🔄 データ再読込</button>
+        <button class="btn" id="btnReinitSheets">🛠️ シート再構築 (ICS取込ルールシート追加など)</button>
+        <a class="btn" href="/setup">🔧 接続設定 (config.json 編集)</a>
+      </div>
+    </div>
+  `;
+  document.querySelectorAll('[data-set-save]').forEach(b => {
+    b.addEventListener('click', async (e) => {
+      const k = e.currentTarget.dataset.setSave;
+      const input = panel.querySelector(`input[data-key="${CSS.escape(k)}"]`);
+      const v = input.value;
+      showLoader(true);
+      try {
+        await callApi('api_updateSetting', k, v);
+        APP.settings[k] = v;
+        updateFiscalYearLabel();
+        toast('保存しました: ' + k, 'success');
+      } catch (err) {
+        toast('エラー: ' + err.message, 'error');
+      } finally {
+        showLoader(false);
+      }
+    });
+  });
+  document.getElementById('btnOpenSheetFromSettings').addEventListener('click', () => {
+    if (APP.boot.spreadsheetUrl) window.open(APP.boot.spreadsheetUrl, '_blank');
+  });
+  document.getElementById('btnReloadAll').addEventListener('click', async () => {
+    showLoader(true);
+    try {
+      await reloadAll();
+      toast('再読込しました', 'success');
+      if (APP.currentTab === 'dashboard') renderDashboard();
+    } catch (e) {
+      toast('エラー: ' + e.message, 'error');
+    } finally {
+      showLoader(false);
+    }
+  });
+  document.getElementById('btnReinitSheets').addEventListener('click', async () => {
+    if (!confirm('既存データは保持したまま、不足しているシート(分類マスタ・ICS取込ルール等)を作成・補完します。実行しますか？')) return;
+    showLoader(true);
+    try {
+      await callApi('api_initializeSpreadsheet');
+      toast('シートを再構築しました', 'success');
+      await reloadAll();
+      renderSettingsTab();
+    } catch (e) {
+      toast('エラー: ' + e.message, 'error');
+    } finally {
+      showLoader(false);
+    }
+  });
+  document.getElementById('btnAddClassification').addEventListener('click', () => addClassificationRow());
+  document.getElementById('btnReloadClassifications').addEventListener('click', () => loadClassificationsEditor());
+  document.getElementById('btnAddRule').addEventListener('click', () => addRuleRow());
+  document.getElementById('btnReloadRules').addEventListener('click', () => loadRulesEditor());
+  document.getElementById('btnPreviewRule').addEventListener('click', previewRuleClassification);
+
+  await loadClassificationsEditor();
+  await loadRulesEditor();
+}
+
+// ----- 分類マスタ編集 -----
+async function loadClassificationsEditor() {
+  const box = document.getElementById('classificationList');
+  if (!box) return;
+  box.innerHTML = '<div class="text-muted">読み込み中...</div>';
+  try {
+    const data = await callApi('api_listClassificationsAll');
+    APP._classifications = data;
+    renderClassificationRows();
+  } catch (e) {
+    box.innerHTML = '<div class="toast toast--error">読み込みエラー: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderClassificationRows() {
+  const box = document.getElementById('classificationList');
+  if (!box) return;
+  const data = APP._classifications || [];
+  const cats = Array.from(new Set(data.map(c => c.category).filter(Boolean)));
+  const catOptions = (selected) => {
+    const all = Array.from(new Set(cats.concat(['ブロック', '実践部会', '専門部会', '関連団体', '全体事業', 'その他'])));
+    return all.map(c => `<option value="${esc(c)}" ${c === selected ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  };
+  box.innerHTML = data.map((c, i) => `
+    <div class="sortlist__row" data-cls-id="${c.id}">
+      <div class="sortlist__handle">${i + 1}</div>
+      <div>
+        <select data-cls-field="category">
+          <option value="">--</option>
+          ${catOptions(c.category)}
+        </select>
+      </div>
+      <input type="text" data-cls-field="subcategory" value="${esc(c.subcategory)}" placeholder="サブ分類名">
+      <label class="check-label">
+        <input type="checkbox" data-cls-field="defaultAllowance" ${c.defaultAllowance ? 'checked' : ''}>
+        日当
+      </label>
+      <label class="check-label">
+        <input type="checkbox" data-cls-field="active" ${c.active ? 'checked' : ''}>
+        有効
+      </label>
+      <div class="sortlist__row-actions">
+        <button class="icon-btn" title="上へ" data-cls-up="${c.id}" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="icon-btn" title="下へ" data-cls-down="${c.id}" ${i === data.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="icon-btn" title="保存" data-cls-save="${c.id}">💾</button>
+        <button class="icon-btn icon-btn--danger" title="削除" data-cls-del="${c.id}">🗑</button>
+      </div>
+    </div>
+  `).join('') || '<div class="empty"><div class="empty__icon">🏷️</div>分類が登録されていません</div>';
+
+  box.querySelectorAll('[data-cls-up]').forEach(b => b.addEventListener('click', (e) => moveClassification(Number(e.currentTarget.dataset.clsUp), -1)));
+  box.querySelectorAll('[data-cls-down]').forEach(b => b.addEventListener('click', (e) => moveClassification(Number(e.currentTarget.dataset.clsDown), +1)));
+  box.querySelectorAll('[data-cls-save]').forEach(b => b.addEventListener('click', (e) => saveClassificationRow(Number(e.currentTarget.dataset.clsSave))));
+  box.querySelectorAll('[data-cls-del]').forEach(b => b.addEventListener('click', (e) => deleteClassificationRow(Number(e.currentTarget.dataset.clsDel))));
+}
+
+function readClassificationRow(id) {
+  const row = document.querySelector(`[data-cls-id="${id}"]`);
+  if (!row) return null;
+  const get = (f) => row.querySelector(`[data-cls-field="${f}"]`);
+  return {
+    id: id,
+    category: get('category').value,
+    subcategory: get('subcategory').value.trim(),
+    defaultAllowance: get('defaultAllowance').checked,
+    active: get('active').checked,
+    order: 0
+  };
+}
+
+async function saveClassificationRow(id) {
+  const payload = readClassificationRow(id);
+  if (!payload) return;
+  if (!payload.category) { toast('分類を選択してください', 'error'); return; }
+  showLoader(true);
+  try {
+    await callApi('api_updateClassification', payload);
+    toast('保存しました', 'success');
+    await loadClassificationsEditor();
+    APP.classifications = await callApi('api_listClassifications');
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function deleteClassificationRow(id) {
+  const data = APP._classifications || [];
+  const target = data.find(x => x.id === id);
+  if (!target) return;
+  if (!confirm(`分類「${target.category} / ${target.subcategory}」を削除します。よろしいですか？\n(既存イベントの分類値は変更されません)`)) return;
+  showLoader(true);
+  try {
+    await callApi('api_deleteClassification', id);
+    toast('削除しました', 'success');
+    await loadClassificationsEditor();
+    APP.classifications = await callApi('api_listClassifications');
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function addClassificationRow() {
+  showLoader(true);
+  try {
+    await callApi('api_addClassification', { category: 'その他', subcategory: '新規分類', defaultAllowance: false, active: true });
+    toast('分類を追加しました', 'success');
+    await loadClassificationsEditor();
+    APP.classifications = await callApi('api_listClassifications');
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function moveClassification(id, delta) {
+  const data = (APP._classifications || []).slice();
+  const idx = data.findIndex(x => x.id === id);
+  if (idx < 0) return;
+  const newIdx = idx + delta;
+  if (newIdx < 0 || newIdx >= data.length) return;
+  const tmp = data[idx]; data[idx] = data[newIdx]; data[newIdx] = tmp;
+  APP._classifications = data;
+  renderClassificationRows();
+  showLoader(true);
+  try {
+    await callApi('api_reorderClassifications', data.map(d => d.id));
+    APP.classifications = await callApi('api_listClassifications');
+  } catch (e) {
+    toast('並び替えエラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+// ----- ICS取込ルール編集 -----
+async function loadRulesEditor() {
+  const box = document.getElementById('rulesList');
+  if (!box) return;
+  box.innerHTML = '<div class="text-muted">読み込み中...</div>';
+  try {
+    const data = await callApi('api_listIcsRules');
+    APP._icsRules = data;
+    renderRuleRows();
+  } catch (e) {
+    box.innerHTML = '<div class="toast toast--error">読み込みエラー: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderRuleRows() {
+  const box = document.getElementById('rulesList');
+  if (!box) return;
+  const data = APP._icsRules || [];
+  document.getElementById('rulesCount').textContent = `${data.length}件`;
+  const cats = Array.from(new Set((APP._classifications || APP.classifications || []).map(c => c.category).filter(Boolean)));
+  const allCats = Array.from(new Set(cats.concat(['ブロック', '実践部会', '専門部会', '関連団体', '全体事業', 'その他'])));
+  box.innerHTML = data.map((r, i) => `
+    <div class="sortlist__row" data-rule-id="${r.id}">
+      <div class="sortlist__handle">${i + 1}</div>
+      <input type="text" data-rule-field="pattern" value="${esc(r.pattern)}" placeholder="例: 南千住">
+      <select data-rule-field="matchType">
+        <option value="contains" ${r.matchType === 'contains' ? 'selected' : ''}>含む</option>
+        <option value="regex" ${r.matchType === 'regex' ? 'selected' : ''}>正規表現</option>
+      </select>
+      <div style="display: flex; gap: 4px;">
+        <select data-rule-field="category" style="flex:1;">
+          ${allCats.map(c => `<option value="${esc(c)}" ${c === r.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+        </select>
+        <input type="text" data-rule-field="subcategory" value="${esc(r.subcategory)}" placeholder="サブ分類" style="flex:1.2;">
+      </div>
+      <label class="check-label">
+        <input type="checkbox" data-rule-field="defaultAllowance" ${r.defaultAllowance ? 'checked' : ''}>
+        日当
+      </label>
+      <label class="check-label">
+        <input type="checkbox" data-rule-field="active" ${r.active ? 'checked' : ''}>
+        有効
+      </label>
+      <div class="sortlist__row-actions">
+        <button class="icon-btn" title="上へ" data-rule-up="${r.id}" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="icon-btn" title="下へ" data-rule-down="${r.id}" ${i === data.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="icon-btn" title="保存" data-rule-save="${r.id}">💾</button>
+        <button class="icon-btn icon-btn--danger" title="削除" data-rule-del="${r.id}">🗑</button>
+      </div>
+    </div>
+  `).join('') || '<div class="empty"><div class="empty__icon">📥</div>ルールが登録されていません</div>';
+
+  box.querySelectorAll('[data-rule-up]').forEach(b => b.addEventListener('click', (e) => moveRule(Number(e.currentTarget.dataset.ruleUp), -1)));
+  box.querySelectorAll('[data-rule-down]').forEach(b => b.addEventListener('click', (e) => moveRule(Number(e.currentTarget.dataset.ruleDown), +1)));
+  box.querySelectorAll('[data-rule-save]').forEach(b => b.addEventListener('click', (e) => saveRuleRow(Number(e.currentTarget.dataset.ruleSave))));
+  box.querySelectorAll('[data-rule-del]').forEach(b => b.addEventListener('click', (e) => deleteRuleRow(Number(e.currentTarget.dataset.ruleDel))));
+}
+
+function readRuleRow(id) {
+  const row = document.querySelector(`[data-rule-id="${id}"]`);
+  if (!row) return null;
+  const get = (f) => row.querySelector(`[data-rule-field="${f}"]`);
+  return {
+    id: id,
+    pattern: get('pattern').value,
+    matchType: get('matchType').value,
+    category: get('category').value,
+    subcategory: get('subcategory').value,
+    defaultAllowance: get('defaultAllowance').checked,
+    active: get('active').checked,
+    order: 0
+  };
+}
+
+async function saveRuleRow(id) {
+  const payload = readRuleRow(id);
+  if (!payload) return;
+  if (!payload.pattern) { toast('パターン(キーワード)を入力してください', 'error'); return; }
+  if (!payload.category) { toast('分類を選択してください', 'error'); return; }
+  showLoader(true);
+  try {
+    await callApi('api_updateIcsRule', payload);
+    toast('保存しました', 'success');
+    await loadRulesEditor();
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function deleteRuleRow(id) {
+  const data = APP._icsRules || [];
+  const t = data.find(x => x.id === id);
+  if (!t) return;
+  if (!confirm(`ルール「${t.pattern}」を削除します。よろしいですか？`)) return;
+  showLoader(true);
+  try {
+    await callApi('api_deleteIcsRule', id);
+    toast('削除しました', 'success');
+    await loadRulesEditor();
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function addRuleRow() {
+  showLoader(true);
+  try {
+    await callApi('api_addIcsRule', { pattern: '', matchType: 'contains', category: 'その他', subcategory: 'その他', defaultAllowance: false, active: true });
+    toast('ルールを追加しました', 'success');
+    await loadRulesEditor();
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function moveRule(id, delta) {
+  const data = (APP._icsRules || []).slice();
+  const idx = data.findIndex(x => x.id === id);
+  if (idx < 0) return;
+  const newIdx = idx + delta;
+  if (newIdx < 0 || newIdx >= data.length) return;
+  const tmp = data[idx]; data[idx] = data[newIdx]; data[newIdx] = tmp;
+  APP._icsRules = data;
+  renderRuleRows();
+  showLoader(true);
+  try {
+    await callApi('api_reorderIcsRules', data.map(d => d.id));
+  } catch (e) {
+    toast('並び替えエラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
+async function previewRuleClassification() {
+  const name = (document.getElementById('rulePreviewName').value || '').trim();
+  const out = document.getElementById('rulePreviewResult');
+  if (!name) { out.textContent = 'イベント名を入力'; out.className = 'pill pill--warn'; return; }
+  showLoader(true);
+  try {
+    const r = await callApi('api_previewIcsClassification', name);
+    out.textContent = `${r.category} / ${r.subcategory}` + (r.dailyAllowance ? '  💰日当対象' : '');
+    out.className = 'pill pill--ok';
+  } catch (e) {
+    out.textContent = 'エラー: ' + e.message;
+    out.className = 'pill pill--warn';
+  } finally {
+    showLoader(false);
+  }
+}
+
+// ==========================================================
+// 起動
+// ==========================================================
+document.addEventListener('DOMContentLoaded', () => {
+  initTabs();
+  bootstrap();
+});
