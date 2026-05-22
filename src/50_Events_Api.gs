@@ -51,7 +51,7 @@ function api_addEvent(ev) {
     return withLock_(() => {
       const sheet = getSheet_(SHEET_NAMES.EVENTS);
       const id = generateNextId_(sheet, 1);
-      sheet.appendRow([
+      appendDataRow_(sheet, [
         id,
         ev.date || '',
         ev.startTime || '',
@@ -66,7 +66,7 @@ function api_addEvent(ev) {
         ev.gCalendarId || '',
         ev.gEventId || '',
         ev.active !== false
-      ]);
+      ], 1);
       return { ok: true, data: { id: id } };
     });
   } catch (e) {
@@ -180,14 +180,14 @@ function api_addClassification(item) {
       if (!sheet) throw new Error('分類マスタがありません。');
       const id = generateNextId_(sheet, 1);
       const order = Number(item.order) || (id * 10);
-      sheet.appendRow([
+      appendDataRow_(sheet, [
         id,
         item.category || '',
         item.subcategory || '',
         !!item.defaultAllowance,
         order,
         item.active !== false
-      ]);
+      ], 1);
       return { ok: true, data: { id: id } };
     });
   } catch (e) {
@@ -283,7 +283,7 @@ function api_addIcsRule(item) {
       if (!sheet) throw new Error('ICS取込ルールシートがありません。');
       const id = generateNextId_(sheet, 1);
       const order = Number(item.order) || (id * 10);
-      sheet.appendRow([
+      appendDataRow_(sheet, [
         id,
         item.pattern || '',
         item.matchType || 'contains',
@@ -292,7 +292,7 @@ function api_addIcsRule(item) {
         !!item.defaultAllowance,
         order,
         item.active !== false
-      ]);
+      ], 1);
       return { ok: true, data: { id: id } };
     });
   } catch (e) {

@@ -68,13 +68,17 @@ function insertEvents_(eventList, options) {
     const sheet = getSheet_(SHEET_NAMES.EVENTS);
     if (!sheet) throw new Error('イベントシートがありません。initializeSpreadsheet()を先に実行してください。');
 
+    // 既存データの重複判定キーを作成。
+    //  - GイベントID (UID)
+    //  - 日付 + 正規化タイトル (NFKC・連続空白圧縮・小文字化)
     const existingObjs = sheetToObjects_(sheet);
     const existingIds = {};
     const existingDateTitle = {};
     existingObjs.forEach(r => {
-      if (r['GイベントID']) existingIds[String(r['GイベントID'])] = true;
+      const gid = String(r['GイベントID'] || '').trim();
+      if (gid) existingIds[gid] = true;
       const date = formatDate_(r['日付']);
-      const title = String(r['イベント名'] || '').trim().toLowerCase();
+      const title = normalizeTitle_(r['イベント名']);
       if (date && title) existingDateTitle[date + '|' + title] = true;
     });
 
@@ -84,43 +88,121 @@ function insertEvents_(eventList, options) {
     const rows = [];
     const imported = [];
     let skipped = 0;
+    const batchGid = {};
+    const batchKey = {};
 
     eventList.forEach(ev => {
-      if (ev.gEventId && existingIds[ev.gEventId]) { skipped++; return; }
+      const gid = String(ev.gEventId || '').trim();
+      if (gid && existingIds[gid]) { skipped++; return; }
+      if (gid && batchGid[gid]) { skipped++; return; }
       const eventDate = formatDate_(ev.startTime);
-      const eventTitle = String(ev.title || '(無題)').trim().toLowerCase();
-      const dupKey = eventDate + '|' + eventTitle;
+      const titleRaw = ev.title || '(無題)';
+      const titleNorm = normalizeTitle_(titleRaw);
+      const dupKey = eventDate + '|' + titleNorm;
       if (existingDateTitle[dupKey]) { skipped++; return; }
-      const classify = autoClassify ? classifyEventName_(ev.title) : { category: 'その他', subcategory: 'その他', dailyAllowance: defaultAllowance };
+      if (batchKey[dupKey]) { skipped++; return; }
+      const classify = autoClassify ? classifyEventName_(titleRaw) : { category: 'その他', subcategory: 'その他', dailyAllowance: defaultAllowance };
       const row = [
         nextId++,
         eventDate,
         ev.allDay ? '' : formatTime_(ev.startTime),
         ev.allDay ? '' : formatTime_(ev.endTime),
         !!ev.allDay,
-        ev.title || '(無題)',
+        titleRaw,
         classify.category,
         classify.subcategory,
         classify.dailyAllowance !== undefined ? classify.dailyAllowance : defaultAllowance,
         ev.location || '',
         ev.description || '',
         ev.gCalendarId || '',
-        ev.gEventId || '',
+        gid,
         true
       ];
       rows.push(row);
       existingDateTitle[dupKey] = true;
+      batchKey[dupKey] = true;
+      if (gid) batchGid[gid] = true;
       imported.push({
         id: row[0], date: row[1], title: row[5], category: row[6], subcategory: row[7]
       });
     });
 
     if (rows.length > 0) {
-      sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+      // getLastRow() はチェックボックス(false値)が並ぶとシート末を返すため、
+      // 実データのある最終行 (ID列) をベースに追記する。
+      const startRow = getLastDataRow_(sheet, 1) + 1;
+      sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
     }
 
     return { imported: rows.length, skipped: skipped, events: imported };
   });
+}
+
+/**
+ * イベントシートに既に登録されている重複イベントを 1 件残して削除する。
+ * 重複の判定: 「日付 + 正規化タイトル」が一致するものは同じイベントとみなす。
+ * 「GイベントID」も同じものが複数あればまとめて 1 件に。
+ * 関連する出席行も、削除対象のイベントIDだけ削除する。
+ *
+ * @return {{removed:number, kept:number}}
+ */
+function dedupExistingEvents_() {
+  return withLock_(() => {
+    const sheet = getSheet_(SHEET_NAMES.EVENTS);
+    if (!sheet) throw new Error('イベントシートがありません。');
+    const lastRow = getLastDataRow_(sheet, 1);
+    if (lastRow < 2) return { removed: 0, kept: 0 };
+    const lastCol = 14;
+    const values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+    const seenKey = {};
+    const seenGid = {};
+    const removeIds = [];
+    const keptRows = [];
+    values.forEach((row) => {
+      const id = Number(row[0]);
+      if (!id) return;
+      const date = formatDate_(row[1]);
+      const title = normalizeTitle_(row[5]);
+      const gid = String(row[12] || '').trim();
+      const key = date + '|' + title;
+      if (gid && seenGid[gid]) { removeIds.push(id); return; }
+      if (date && title && seenKey[key]) { removeIds.push(id); return; }
+      if (gid) seenGid[gid] = true;
+      if (date && title) seenKey[key] = true;
+      keptRows.push(row);
+    });
+
+    if (removeIds.length === 0) return { removed: 0, kept: keptRows.length };
+
+    // シートを書き換える: 残す行だけを再書き込み、余剰行はクリア。
+    sheet.getRange(2, 1, lastRow - 1, lastCol).clearContent();
+    if (keptRows.length > 0) {
+      sheet.getRange(2, 1, keptRows.length, lastCol).setValues(keptRows);
+    }
+
+    // 関連する出席行も削除
+    const att = getSheet_(SHEET_NAMES.ATTENDANCE);
+    if (att && att.getLastRow() >= 2) {
+      const lastAttRow = getLastDataRow_(att, 1);
+      const attValues = att.getRange(2, 1, lastAttRow - 1, 7).getValues();
+      const removeSet = {};
+      removeIds.forEach(id => { removeSet[id] = true; });
+      for (let i = attValues.length - 1; i >= 0; i--) {
+        if (removeSet[Number(attValues[i][1])]) {
+          att.deleteRow(i + 2);
+        }
+      }
+    }
+    return { removed: removeIds.length, kept: keptRows.length };
+  });
+}
+
+function api_dedupExistingEvents() {
+  try {
+    return { ok: true, data: dedupExistingEvents_() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 }
 
 /**

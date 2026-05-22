@@ -48,7 +48,7 @@ function api_addMember(member) {
         true,
         member.note || ''
       ];
-      sheet.appendRow(row);
+      appendDataRow_(sheet, row, 1);
       return { ok: true, data: { id: id } };
     });
   } catch (e) {

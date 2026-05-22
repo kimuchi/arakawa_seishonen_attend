@@ -500,6 +500,7 @@ async function renderEventsTab() {
         <button class="btn btn--primary" id="btnAddEvent">+ 新規イベント</button>
         <button class="btn" id="btnImportIcs1y">🔄 ICSを1年分取込</button>
         <button class="btn btn--ghost" id="btnImportIcs2y">📥 ICSを2年分取込</button>
+        <button class="btn btn--danger" id="btnDedupEvents">🧹 重複イベントを掃除</button>
       </div>
 
       <div class="filter-bar">
@@ -524,6 +525,7 @@ async function renderEventsTab() {
   document.getElementById('btnAddEvent').addEventListener('click', () => openEventModal());
   document.getElementById('btnImportIcs1y').addEventListener('click', () => runConfiguredIcsImport(1));
   document.getElementById('btnImportIcs2y').addEventListener('click', () => runConfiguredIcsImport(2));
+  document.getElementById('btnDedupEvents').addEventListener('click', runDedupEvents);
   ['evFilterCategory', 'evFilterAllowance', 'evFilterTitle'].forEach(id => {
     const el = document.getElementById(id);
     el.addEventListener('change', renderEventRows_);
@@ -715,6 +717,21 @@ function openEventModal(ev) {
 }
 
 // ICS取込 (1年/2年で範囲を切替)
+async function runDedupEvents() {
+  if (!confirm('「日付 + イベント名」または「GイベントID」が同じイベントを 1 件残して削除します。\n対象に紐づく出席行も削除されます。実行しますか？')) return;
+  showLoader(true);
+  try {
+    const r = await callApi('api_dedupExistingEvents');
+    toast(`重複を削除しました: ${r.removed}件削除 / ${r.kept}件保持`, 'success');
+    APP.events = await callApi('api_listEvents', {});
+    renderEventRows_();
+  } catch (e) {
+    toast('エラー: ' + e.message, 'error');
+  } finally {
+    showLoader(false);
+  }
+}
+
 async function runConfiguredIcsImport(spanYears) {
   const baseStart = APP.settings['年度開始日'] || '2026-04-01';
   const baseEnd = APP.settings['年度終了日'] || '2027-03-31';
