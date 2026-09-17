@@ -273,3 +273,34 @@ function api_updateSetting(key, value) {
     return { ok: false, error: e.message };
   }
 }
+
+/**
+ * イベント別の出席/欠席の登録人数を集計する。
+ * 日当額はイベントの「日当対象」フラグと日当単価から算出できるよう、
+ * 単価も併せて返す (クライアント側で amount = attended * 単価 を計算)。
+ *
+ * @return {{ok:boolean, data:{dailyAllowance:number, stats:Object}}}
+ *   stats: { [イベントID]: { attended: number, absent: number } }
+ */
+function api_getEventStats() {
+  try {
+    const settings = readSettings_();
+    const daily = Number(settings['日当単価']) || FISCAL_YEAR_DEFAULT.DAILY_ALLOWANCE;
+    const att = getSheet_(SHEET_NAMES.ATTENDANCE);
+    const values = att && att.getLastRow() >= 2
+      ? att.getRange(2, 1, att.getLastRow() - 1, 7).getValues()
+      : [];
+    const stats = {};
+    values.forEach(row => {
+      const eventId = Number(row[1]);
+      if (!eventId) return;
+      if (!stats[eventId]) stats[eventId] = { attended: 0, absent: 0 };
+      const status = row[3];
+      if (status === ATTENDANCE_STATUS.ATTENDED) stats[eventId].attended++;
+      else if (status === ATTENDANCE_STATUS.ABSENT) stats[eventId].absent++;
+    });
+    return { ok: true, data: { dailyAllowance: daily, stats: stats } };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}

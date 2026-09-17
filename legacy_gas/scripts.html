@@ -519,6 +519,7 @@ async function renderEventsTab() {
         <span id="evFilterCount" class="pill pill--muted"></span>
       </div>
 
+      <div id="evTotals" class="ev-totals"></div>
       <div id="eventsList"></div>
     </div>
   `;
@@ -532,6 +533,41 @@ async function renderEventsTab() {
     el.addEventListener('input', renderEventRows_);
   });
   renderEventRows_();
+  // 出席/欠席人数・日当は別途取得して再描画 (一覧表示を待たせない)
+  await reloadEventStats_();
+}
+
+/**
+ * イベント別の出席/欠席人数と日当単価を取得し、一覧を再描画する。
+ */
+async function reloadEventStats_() {
+  try {
+    APP._eventStats = await callApi('api_getEventStats');
+  } catch (e) {
+    APP._eventStats = null;
+  }
+  if (document.getElementById('eventsList')) renderEventRows_();
+}
+
+/**
+ * 指定イベントの出席/欠席人数と日当額を返す。
+ * 日当額は「日当対象」イベントのみ 出席人数 × 日当単価 で算出する。
+ */
+function eventStatOf_(ev) {
+  const loaded = !!APP._eventStats;
+  const src = (APP._eventStats && APP._eventStats.stats) || {};
+  const s = src[ev.id] || { attended: 0, absent: 0 };
+  const rate = (APP._eventStats && Number(APP._eventStats.dailyAllowance))
+    || Number(APP.settings['日当単価']) || 500;
+  const attended = Number(s.attended) || 0;
+  const absent = Number(s.absent) || 0;
+  return {
+    loaded: loaded,
+    attended: attended,
+    absent: absent,
+    rate: rate,
+    amount: ev.dailyAllowance ? attended * rate : 0
+  };
 }
 
 function renderEventRows_() {
@@ -545,12 +581,58 @@ function renderEventRows_() {
     return true;
   });
   document.getElementById('evFilterCount').textContent = `${list.length}件`;
+
+  // 絞り込み結果の合計 (出席/欠席の延べ人数・日当合計)
+  const totals = list.reduce((a, ev) => {
+    const st = eventStatOf_(ev);
+    a.attended += st.attended;
+    a.absent += st.absent;
+    a.amount += st.amount;
+    return a;
+  }, { attended: 0, absent: 0, amount: 0 });
+  const statsLoaded = !!APP._eventStats;
+  const totalsBox = document.getElementById('evTotals');
+  if (totalsBox) {
+    totalsBox.innerHTML = statsLoaded ? `
+      <div class="ev-totals__item">
+        <span class="ev-totals__label">出席 (延べ)</span>
+        <span class="ev-totals__num ev-totals__num--ok">${totals.attended}<small>名</small></span>
+      </div>
+      <div class="ev-totals__item">
+        <span class="ev-totals__label">欠席 (延べ)</span>
+        <span class="ev-totals__num ev-totals__num--ng">${totals.absent}<small>名</small></span>
+      </div>
+      <div class="ev-totals__item ev-totals__item--money">
+        <span class="ev-totals__label">日当合計</span>
+        <span class="ev-totals__num">¥${totals.amount.toLocaleString()}</span>
+      </div>
+    ` : '<div class="ev-totals__loading">集計を読み込み中...</div>';
+  }
+
   const box = document.getElementById('eventsList');
   if (list.length === 0) {
     box.innerHTML = `<div class="empty"><div class="empty__icon">📭</div>イベントがありません</div>`;
     return;
   }
-  box.innerHTML = list.map(ev => `
+  box.innerHTML = list.map(ev => {
+    const st = eventStatOf_(ev);
+    const statsHtml = st.loaded ? `
+      <div class="event-item__stats">
+        <div class="event-stat">
+          <span class="event-stat__num event-stat__num--ok">${st.attended}</span>
+          <span class="event-stat__label">出席</span>
+        </div>
+        <div class="event-stat">
+          <span class="event-stat__num event-stat__num--ng">${st.absent}</span>
+          <span class="event-stat__label">欠席</span>
+        </div>
+        <div class="event-stat event-stat--money">
+          <span class="event-stat__num">${ev.dailyAllowance ? '¥' + st.amount.toLocaleString() : '—'}</span>
+          <span class="event-stat__label">日当</span>
+        </div>
+      </div>
+    ` : '<div class="event-item__stats event-item__stats--loading">…</div>';
+    return `
     <div class="event-item">
       <div class="event-item__date">${formatDateBadge_(ev.date)}</div>
       <div class="event-item__body">
@@ -563,13 +645,15 @@ function renderEventRows_() {
           ${ev.location ? '<span>📍 ' + esc(ev.location) + '</span>' : ''}
         </div>
       </div>
+      ${statsHtml}
       <div class="event-item__actions">
         <button class="btn btn--sm" data-att="${ev.id}">出欠登録</button>
         <button class="btn btn--sm" data-edit="${ev.id}">編集</button>
         <button class="btn btn--sm btn--danger" data-del="${ev.id}">削除</button>
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
   box.querySelectorAll('[data-att]').forEach(b => {
     b.addEventListener('click', (e) => {
       const id = Number(e.currentTarget.dataset.att);
@@ -593,7 +677,7 @@ function renderEventRows_() {
         await callApi('api_deleteEvent', id);
         toast('削除しました', 'success');
         APP.events = await callApi('api_listEvents', {});
-        renderEventRows_();
+        await reloadEventStats_();
       } catch (err) {
         toast('エラー: ' + err.message, 'error');
       } finally {
@@ -724,7 +808,7 @@ async function runDedupEvents() {
     const r = await callApi('api_dedupExistingEvents');
     toast(`重複を削除しました: ${r.removed}件削除 / ${r.kept}件保持`, 'success');
     APP.events = await callApi('api_listEvents', {});
-    renderEventRows_();
+    await reloadEventStats_();
   } catch (e) {
     toast('エラー: ' + e.message, 'error');
   } finally {

@@ -743,6 +743,101 @@ body {
 .event-item__meta { font-size: 12px; color: var(--color-text-muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .event-item__actions { flex: 0 0 auto; display: flex; gap: 6px; }
 
+/* ===== Event list: attendance / allowance stats ===== */
+.event-item__stats {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+.event-item__stats--loading {
+  color: var(--color-text-soft);
+  font-size: 13px;
+  align-items: center;
+  padding: 0 8px;
+}
+.event-stat {
+  min-width: 52px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-soft);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  line-height: 1.15;
+}
+.event-stat--money { min-width: 76px; }
+.event-stat__num {
+  font-size: 15px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+}
+.event-stat__num--ok { color: var(--color-success); }
+.event-stat__num--ng { color: var(--color-danger); }
+.event-stat__label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-text-soft);
+  letter-spacing: 0.04em;
+}
+
+/* 絞り込み結果の合計ストリップ */
+.ev-totals {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: stretch;
+  margin-bottom: 14px;
+}
+.ev-totals:empty { display: none; }
+.ev-totals__loading { font-size: 12.5px; color: var(--color-text-soft); }
+.ev-totals__item {
+  flex: 1 1 140px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-soft);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ev-totals__item--money {
+  background:
+    linear-gradient(180deg, rgba(37, 99, 235, 0.06) 0%, rgba(255,255,255,0) 70%),
+    var(--color-surface);
+  border-color: rgba(37, 99, 235, 0.22);
+}
+.ev-totals__label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  letter-spacing: 0.04em;
+}
+.ev-totals__num {
+  font-size: 20px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+}
+.ev-totals__num small { font-size: 12px; font-weight: 700; margin-left: 2px; opacity: 0.75; }
+.ev-totals__num--ok { color: var(--color-success); }
+.ev-totals__num--ng { color: var(--color-danger); }
+
+@media (max-width: 860px) {
+  .event-item { flex-wrap: wrap; }
+  .event-item__body { flex: 1 1 100%; order: 1; }
+  .event-item__date { order: 0; }
+  .event-item__stats { order: 2; flex: 1 1 auto; }
+  .event-item__actions { order: 3; margin-left: auto; }
+}
+
 /* ===== Helpers ===== */
 .text-muted { color: #6b7280; }
 .text-small { font-size: 12px; }

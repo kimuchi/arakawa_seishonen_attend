@@ -4,8 +4,10 @@ Google スプレッドシートをデータベースとして使う Web 出席�
 Google Apps Script から Node.js (Express + Google Sheets API) に置き換え、Cloud Run / Docker / オンプレ Linux など **任意の環境にデプロイ可能** にしました。
 
 > 📘 詳しい手順は **[DEPLOYMENT.md](./DEPLOYMENT.md)** (デプロイガイド) と **[USER_MANUAL.md](./USER_MANUAL.md)** (ユーザーマニュアル) を参照してください。
->
-> 旧 GAS 版のソースは `legacy_gas/` にバックアップしてあります。
+
+> ⚠️ **現在の稼働状況**: Cloud Run 版は **まだデプロイされておらず**、運用中なのは **GAS 版 (`legacy_gas/`)** です。
+> 機能追加は両方に反映しているので、GAS 版のまま使い続けることも、任意のタイミングで Cloud Run 版へ移行することもできます。
+> GAS 版の更新手順は [GAS 版の運用 (clasp)](#gas-版の運用-clasp) を参照してください。
 
 ## 機能概要
 
@@ -45,6 +47,33 @@ gcloud run deploy arakawa-shussekibo \
 
 詳しくは [DEPLOYMENT.md](./DEPLOYMENT.md) を。
 
+## GAS 版の運用 (clasp)
+
+現在稼働中の Google Apps Script 版は `legacy_gas/` にあります。clasp で更新できます。
+
+```bash
+# 初回のみ
+npm install -g @google/clasp
+clasp login
+
+# 設定ファイルを用意 (.clasp.json は .gitignore 済み)
+cp .clasp.json.example .clasp.json
+# → scriptId を実際の GAS プロジェクトの ID に書き換える
+#   (GASエディタ → プロジェクトの設定 → スクリプト ID でコピーできます)
+
+# 反映
+clasp push -f
+
+# Webアプリとして再デプロイ (既存のDeploymentを更新する場合)
+clasp deployments                                  # Deployment ID を確認
+clasp version "変更内容メモ"
+clasp deploy --deploymentId <既存のDeployment ID> --description "prod"
+```
+
+`.clasp.json` の `rootDir` は `./legacy_gas` を指しています。以前 `./src` を指していた `.clasp.json` を使っている場合は、`rootDir` の書き換えが必要です。
+
+> **clasp を使わない場合**: GASエディタで該当ファイルを開き、`legacy_gas/` 配下の同名ファイルの中身を貼り付けて保存 → 再デプロイでも反映できます。
+
 ## ディレクトリ構成
 
 ```
@@ -54,6 +83,7 @@ arakawa_seishonen_attend/
 ├── USER_MANUAL.md          # ユーザマニュアル (アプリ利用者向け)
 ├── package.json
 ├── Dockerfile              # Cloud Run / 任意のコンテナ環境向け
+├── .clasp.json.example     # GAS版を clasp 管理するための雛形
 ├── .dockerignore
 ├── .gitignore
 ├── data/
@@ -78,8 +108,8 @@ arakawa_seishonen_attend/
 │   ├── styles.css
 │   ├── scripts.js          # アプリのクライアント JS
 │   └── setup.js            # セットアップ画面の JS
-└── legacy_gas/             # 旧 Google Apps Script 版 (アーカイブ)
-    ├── 00_Constants.gs
+└── legacy_gas/             # Google Apps Script 版 (★現在の稼働中バージョン)
+    ├── 00_Constants.gs     #   clasp の rootDir はここを指す
     └── ...
 ```
 
