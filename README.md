@@ -95,6 +95,7 @@ arakawa_seishonen_attend/
 | POST | `/api/initialize-spreadsheet` | シートの再構築 |
 | GET / POST / PUT / DELETE | `/api/members[/:id]` | メンバ CRUD |
 | GET / POST / PUT / DELETE | `/api/events[/:id]` | イベント CRUD |
+| GET | `/api/events/stats` | イベント別の出席/欠席人数と日当単価 |
 | GET / POST / PUT / DELETE | `/api/classifications[/:id]` | 分類マスタ CRUD |
 | GET / POST / PUT / DELETE | `/api/ics-rules[/:id]` | ICS取込ルール CRUD |
 | GET | `/api/attendance/:eventId` | 指定イベントの出席状況 |

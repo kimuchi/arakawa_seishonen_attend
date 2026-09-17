@@ -19,6 +19,7 @@
  *   DELETE /api/members/:id
  *
  *   GET  /api/events
+ *   GET  /api/events/stats   イベント別の出席/欠席人数と日当単価
  *   POST /api/events
  *   PUT  /api/events/:id
  *   DELETE /api/events/:id
@@ -274,6 +275,11 @@ app.delete('/api/members/:id', requireConfigured, async (req, res) => {
 });
 
 // ---------- イベント ----------
+// /api/events/:id より前に登録しておく (パス衝突回避)
+app.get('/api/events/stats', requireConfigured, async (req, res) => {
+  try { res.json({ ok: true, data: await summaryApi.eventAttendanceStats() }); }
+  catch (e) { res.json({ ok: false, error: e.message }); }
+});
 app.get('/api/events', requireConfigured, async (req, res) => {
   try { res.json({ ok: true, data: await eventsApi.listEvents(req.query || {}) }); }
   catch (e) { res.json({ ok: false, error: e.message }); }

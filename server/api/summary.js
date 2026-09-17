@@ -196,9 +196,34 @@ async function summarizeByEvent(opt) {
   return { range, events: data };
 }
 
+/**
+ * イベント別の出席/欠席の登録人数を集計する。
+ * 日当額はイベントの「日当対象」フラグと日当単価から算出できるよう、
+ * 単価も併せて返す (クライアント側で amount = attended * 単価 を計算)。
+ *
+ * @return {{dailyAllowance:number, stats: Object<string,{attended:number, absent:number}>}}
+ */
+async function eventAttendanceStats() {
+  const settings = await readSettings();
+  const daily = Number(settings['日当単価']) || FISCAL_YEAR_DEFAULT.DAILY_ALLOWANCE;
+  const attGrid = await sc.getSheetGrid(SHEET_NAMES.ATTENDANCE);
+  const stats = {};
+  for (let i = 1; i < attGrid.length; i++) {
+    const row = attGrid[i];
+    const eid = Number(row[1]);
+    if (!eid) continue;
+    if (!stats[eid]) stats[eid] = { attended: 0, absent: 0 };
+    const status = row[3];
+    if (status === ATTENDANCE_STATUS.ATTENDED) stats[eid].attended++;
+    else if (status === ATTENDANCE_STATUS.ABSENT) stats[eid].absent++;
+  }
+  return { dailyAllowance: daily, stats };
+}
+
 module.exports = {
   getSettings,
   updateSetting,
   summarizeByMember,
   summarizeByEvent,
+  eventAttendanceStats,
 };
